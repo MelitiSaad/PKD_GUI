@@ -229,9 +229,9 @@ class MainWindow(QMainWindow):
         m_seg.addSeparator()
         m_cleanup = m_seg.addMenu("Clean up")
         for oid, _l, _i, _k in OPERATIONS:
-            m_cleanup.addAction(self.act[oid])
-        m_cleanup.addSeparator()
-        m_cleanup.addAction(self.act["remove_unused"])
+            m_seg.addAction(self.act[oid])
+        m_seg.addSeparator()
+        m_seg.addAction(self.act["remove_unused"])
 
         m_tools = mb.addMenu("&Tools")
         for tid, _l, _i, _k in TOOLS:
@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
         self.act["brush_minus"].triggered.connect(lambda: self._nudge_brush(-1))
         self.act["brush_plus"].triggered.connect(lambda: self._nudge_brush(+1))
         self.act["brush_threshold"].toggled.connect(self._on_threshold_toggled)
-        self.act["brush_protect"].toggled.connect(self._on_protect_toggled)
+        self.act["brush_protect"].toggled.connect(self.controller.set_protect_existing)
         self.act["reset_view"].triggered.connect(self._reset_view)
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
@@ -394,19 +394,7 @@ class MainWindow(QMainWindow):
         is_brush = name == "brush"
         self.brush_spin.setEnabled(is_brush)
         self.brush_mode.setEnabled(is_brush)
-        self.act["brush_protect"].setEnabled(name in {"brush", "lasso"})
-
-    def _update_tool_feedback(self, name=None):
-        name = name or self.controller.tool
-        label = _SHORTCUTS[name][0]
-        protected = self.act["brush_protect"].isChecked()
-        policy = " · Protect Labels on" if protected and name in {"brush", "lasso"} else ""
-        self.lbl_tool.setText(f"  {label}{policy}")
-        self.lbl_hint.setText("   " + TOOL_HINTS.get(name, ""))
-
-    def _on_protect_toggled(self, enabled):
-        self.controller.set_protect_existing(enabled)
-        self._update_tool_feedback()
+        self.act["brush_protect"].setEnabled(is_brush)
 
     @gui_guard
 
