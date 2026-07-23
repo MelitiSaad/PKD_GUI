@@ -1,0 +1,26 @@
+<RCC>
+    <qresource prefix="/scripts">
+        <file>Scripts/test_Library.js</file>
+        <file>Scripts/test_ProbeIntensity.js</file>
+        <file>Scripts/test_RegionCompetition.js</file>
+        <file>Scripts/test_RandomForest.js</file>
+        <file>Scripts/test_Workspace.js</file>
+        <file>Scripts/test_DiffSpace.js</file>
+        <file>Scripts/test_EdgeAttraction.js</file>
+        <file>Scripts/test_4DContinuousRendering.js</file>
+        <file>Scripts/test_4DReplayWithMeshUpdate.js</file>
+        <file>Scripts/test_LabelSmoothing.js</file>
+        <file>Scripts/test_EchoCartesianDicomLoading.js</file>
+        <file>Scripts/test_PreferencesDialog.js</file>
+        <file>Scripts/test_MeshImport.js</file>
+        <file>Scripts/test_MeshWorkspace.js</file>
+        <file>Scripts/test_SegmentationMesh.js</file>
+        <file>Scripts/test_VolumeRendering.js</file>
+        <file>Scripts/test_NaNs.js</file>
+        <file>Scripts/test_Reloading.js</file>
+        <file>Scripts/test_4DToMC.js</file>
+        <file>Scripts/test_MCTo4D.js</file>
+        <file>Scripts/test_DeformationGrid.js</file>
+    </qresource>
+    <qresource prefix="/"/>
+</RCC>
