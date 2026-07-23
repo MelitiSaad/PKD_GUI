@@ -40,6 +40,9 @@ class ToolController(QObject):
         self.brush_radius = DEFAULT_BRUSH_RADIUS
         self.threshold_band: Optional[Tuple[float, float]] = None
         self.morph_3d = True
+        # Safety-first default for QC: painting must not silently relabel a
+        # neighbouring object. Experts can disable this for reassignment work.
+        self.protect_existing = True
         self.island_min = 20
         self._rec: Optional[StrokeRecorder] = None
         self._last_vh: Optional[Tuple[int, int]] = None
@@ -63,6 +66,9 @@ class ToolController(QObject):
         if mode in BRUSH_MODES:
             self.brush_mode = mode
 
+    def set_protect_existing(self, enabled: bool) -> None:
+        self.protect_existing = bool(enabled)
+
     def set_brush_radius(self, r: int) -> None:
         self.brush_radius = int(np.clip(r, MIN_BRUSH_RADIUS, MAX_BRUSH_RADIUS))
         self.ortho.set_brush_radius(self.brush_radius)
@@ -77,32 +83,43 @@ class ToolController(QObject):
         return 0 if right else int(self.seg.active_id)
 
     def _plane_stamp(self, plane, v: int, h: int, value: int) -> None:
+        self._plane_stamp_centers(plane, np.asarray([v]), np.asarray([h]), value)
+
+    def _plane_stamp_centers(self, plane, vs: np.ndarray, hs: np.ndarray, value: int) -> None:
+        """Stamp a batch of brush centres in one vectorised recorder update."""
         if self._rec is None:
             return
         dv, dh = disk_offsets(self.brush_radius)
-        vv = v + dv
-        hh = h + dh
+        # Expanding all dabs at once replaces hundreds of repeated coordinate
+        # transforms, unique() calls, and Python-dict passes for a fast drag.
+        vv = (np.asarray(vs, dtype=np.intp).ravel()[:, None] + dv[None, :]).ravel()
+        hh = (np.asarray(hs, dtype=np.intp).ravel()[:, None] + dh[None, :]).ravel()
         shape = self.seg.data.shape
         ii, jj, kk = plane.disp_to_vox_arrays(vv, hh, self.ortho.cursor, shape)
+        R, C, S = shape
+        inside = (ii >= 0) & (ii < R) & (jj >= 0) & (jj < C) & (kk >= 0) & (kk < S)
+        ii, jj, kk = ii[inside], jj[inside], kk[inside]
+        if ii.size == 0:
+            return
         if self.brush_mode == "threshold" and value != 0 and self.threshold_band is not None and self.image is not None:
-            R, C, S = shape
-            m = (ii >= 0) & (ii < R) & (jj >= 0) & (jj < C) & (kk >= 0) & (kk < S)
-            ii, jj, kk = ii[m], jj[m], kk[m]
             lo, hi = self.threshold_band
             vals = self.image.data[ii, jj, kk]
             keep = (vals >= lo) & (vals <= hi)
             ii, jj, kk = ii[keep], jj[keep], kk[keep]
+        if ii.size and value != 0 and self.protect_existing:
+            keep = segops.paintable_mask(self.seg.data[ii, jj, kk], value, True)
+            ii, jj, kk = ii[keep], jj[keep], kk[keep]
         self._rec.stamp_voxels(ii, jj, kk, value)
 
     def _plane_stamp_line(self, plane, v0, h0, v1, h1, value) -> None:
-        n = int(max(abs(v1 - v0), abs(h1 - h0)))
-        if n <= 1:
-            self._plane_stamp(plane, v1, h1, value)
-            return
-        vs = np.linspace(v0, v1, n + 1).round().astype(int)
-        hs = np.linspace(h0, h1, n + 1).round().astype(int)
-        for v, h in zip(vs, hs):
-            self._plane_stamp(plane, int(v), int(h), value)
+        distance = float(np.hypot(v1 - v0, h1 - h0))
+        # A disk covers the gap when adjacent centres are at most one radius
+        # apart.  This preserves continuous strokes but avoids a dab per pixel
+        # for large brushes and rapid mouse moves.
+        steps = max(1, int(np.ceil(distance / max(1, self.brush_radius))))
+        vs = np.rint(np.linspace(v0, v1, steps + 1)).astype(np.intp)
+        hs = np.rint(np.linspace(h0, h1, steps + 1)).astype(np.intp)
+        self._plane_stamp_centers(plane, vs, hs, value)
 
     # -- paint interaction (from OrthoView) ------------------------------
     def plane_paint_start(self, plane, v, h, right=False) -> None:
@@ -112,7 +129,7 @@ class ToolController(QObject):
         self._rec = StrokeRecorder(self.seg, self.tool)
         self._last_vh = (v, h)
         self._plane_stamp(plane, v, h, self._paint_val)
-        self.ortho.redraw_overlay()
+        self.ortho.redraw_overlay(plane)
 
     def plane_paint_move(self, plane, v, h, right=False) -> None:
         if self._rec is None:
@@ -120,7 +137,7 @@ class ToolController(QObject):
         v0, h0 = self._last_vh
         self._plane_stamp_line(plane, v0, h0, v, h, self._paint_val)
         self._last_vh = (v, h)
-        self.ortho.redraw_overlay()
+        self.ortho.redraw_overlay(plane)
 
     def plane_paint_end(self) -> None:
         if self._rec is None:

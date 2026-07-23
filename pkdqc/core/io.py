@@ -157,12 +157,13 @@ def load_image(path: str) -> ImageVolume:
     return ImageVolume(data=data, spacing=spacing, affine=affine, path=path)
 
 
-def load_segmentation(path: str, ref_shape: Tuple[int, int, int]) -> Segmentation:
+def load_segmentation(path: str, ref_shape: Tuple[int, int, int],
+                      ref_affine: np.ndarray | None = None) -> Segmentation:
     try:
         if _is_nifti(path):
-            data, _spacing, _affine = _load_nifti(path, as_int=True)
+            data, _spacing, affine = _load_nifti(path, as_int=True)
         else:
-            arr, _spacing, _affine = _load_dicom_series(path)
+            arr, _spacing, affine = _load_dicom_series(path)
             data = np.rint(arr).astype(np.uint16)
     except LoadError:
         raise
@@ -173,6 +174,16 @@ def load_segmentation(path: str, ref_shape: Tuple[int, int, int]) -> Segmentatio
         raise LoadError(
             f"Segmentation shape {data.shape} does not match image {tuple(ref_shape)}. "
             "They must be in the same voxel grid."
+        )
+    # Matching shapes alone are unsafe: a translated or differently oriented
+    # NIfTI can have the same dimensions while its labels map to other anatomy.
+    # Both inputs have already been canonicalised, so their voxel-to-world
+    # transforms must agree before we permit an editable overlay.
+    if ref_affine is not None and _is_nifti(path) and not np.allclose(
+            affine, ref_affine, rtol=1e-5, atol=1e-3):
+        raise LoadError(
+            "Segmentation geometry does not match the image (affine transform differs). "
+            "Resample it into the image voxel grid before loading."
         )
     ids = np.unique(data)
     return Segmentation(data, LabelTable.from_ids(ids))

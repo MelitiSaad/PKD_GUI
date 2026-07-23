@@ -342,9 +342,19 @@ class OrthoView(QWidget):
         for p in self.planes.values():
             p.refresh()
 
-    def redraw_overlay(self):
-        for p in self.planes.values():
-            p.redraw_overlay()
+    def redraw_overlay(self, plane=None):
+        """Refresh a segmentation overlay.
+
+        During a live stroke only the pane receiving pointer events needs a
+        frame.  Cross-plane overlays are synchronized at stroke completion;
+        rebuilding all three full slice images for every mouse event was the
+        primary source of visible brush stutter.
+        """
+        if plane is None:
+            for p in self.planes.values():
+                p.redraw_overlay()
+        else:
+            self.planes[plane.name].redraw_overlay()
 
     # -- cursor / navigation --------------------------------------------
     def set_cursor(self, i, j, k):

@@ -87,14 +87,17 @@ class StrokeRecorder:
         flat = np.unique(np.ravel_multi_index(
             (ii.astype(np.intp), jj.astype(np.intp), kk.astype(np.intp)), (R, C, S)))
         flatv = data.reshape(-1)
-        cur = flatv[flat]
-        unseen = [int(f) for f in flat.tolist() if f not in self._orig]
-        if unseen:
-            ovals = flatv[np.asarray(unseen, dtype=np.int64)]
-            for f, ov in zip(unseen, ovals.tolist()):
-                self._orig[f] = ov
-        if not (cur != np.uint16(value)).any():
+        # A dab that already has the requested value is a no-op.  Filtering it
+        # before recording avoids retaining large, redundant diffs while a
+        # stroke overlaps its previous dabs.
+        flat = flat[flatv[flat] != np.uint16(value)]
+        if flat.size == 0:
             return False
+        unseen = [int(f) for f in flat if int(f) not in self._orig]
+        if unseen:
+            unseen_arr = np.asarray(unseen, dtype=np.int64)
+            for f, ov in zip(unseen, flatv[unseen_arr]):
+                self._orig[f] = int(ov)
         flatv[flat] = np.uint16(value)
         self._slices.update(int(z) for z in np.unique(kk).tolist())  # axial slices touched
         return True
