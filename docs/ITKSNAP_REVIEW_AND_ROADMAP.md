@@ -200,18 +200,32 @@ segmentation, changed voxels, and one-command undo payload are unchanged.
 The environment used for these numbers lacks `libGL.so.1`, so Qt/QImage upload
 and interactive GPU frame timing remain a required desktop validation step.
 
-### Polygon first-release design
+### Lasso design
 
-Polygon is intentionally a 2D-per-current-plane tool.  It rasterises display
+Lasso is intentionally a 2D-per-current-plane tool.  It rasterises display
 coordinates and maps them through the existing axial/coronal/sagittal plane
 mapping before producing one `EditCommand`; it therefore changes the same voxel
 grid without changing affine or physical geometry.  It is entered through
-**Segmentation → Advanced correction → Polygon Add/Remove** (`P` / `Shift+P`),
-shows its small Add/Remove controls only while active, completes on double-click
-or right-click, and then restores the preceding tool.  Add obeys Protect Labels;
-Remove follows the established brush erase rule.  This avoids a permanent lasso
-tool-rail button and keeps a large correction to one undo/autosave/edit-tracking
-operation.
+the **Lasso** tool (`L`) in the primary rail.  The reviewer drags a freehand
+contour, releases to preview its closed selection, then chooses the small
+contextual Add/Remove control.  Add obeys Protect Labels; Remove follows the
+established brush erase rule.  Lasso remains active for rapid repeated kidney
+boundary corrections while the contour itself is cleared after each operation.
+
+## Cleanup-tool audit (kidney AI-QC)
+
+| Tool | Practical value / ITK-SNAP lesson | Risk | Decision |
+|---|---|---|---|
+| Remove islands | Useful after AI creates tiny detached false positives, especially at renal boundaries. ITK-SNAP's connected-component tools are effective when constrained to a label/ROI. | A fixed threshold can silently remove a true small renal remnant or accessory structure. | **Keep, Advanced correction only.** Require a visible voxel threshold and report affected components before applying in a future refinement. |
+| Fill holes | Occasionally useful for isolated voxel holes from prediction artifacts. | In cystic PKD, an anatomical cyst or collecting-system space can be incorrectly filled, particularly in 3D. | **Hide from the default workflow; retain under Advanced correction.** Default to 2D preview before any future 3D use. |
+| Interpolate slices | Valuable for a manually drawn sparse contour workflow, but much less useful when correcting a dense AI segmentation. ITK-SNAP uses interpolation as a deliberate contour workflow. | Can overwrite trustworthy AI detail through a long gap and blur irregular cystic anatomy. | **Keep only as an advanced, explicit action.** It is not a recommended routine QC action. |
+| Grow / shrink | Can correct a uniform one-voxel boundary bias, but is rarely a safe kidney correction tool. | It changes the entire label and can bridge organs or erase narrow true anatomy. | **Remove from the primary Clean up menu in the next UI pass; retain only in an expert Advanced correction menu with preview.** |
+| Threshold brush | Helpful for local edge-aware touch-up on homogeneous renal parenchyma. | CT kidney intensity overlaps liver/spleen and is unreliable in contrast phases/cystic disease. | **Keep as an expert brush mode**, not an automatic segmentation tool. |
+
+The highest-value next work remains conservative connected fill with preview,
+explicit label safety/isolation, and lightweight review-state/bookmark tools.
+They should be evaluated and delivered separately; none should displace lasso as
+the fastest manual correction tool for irregular kidney boundaries.
 
 ## Modern workflow design rules
 

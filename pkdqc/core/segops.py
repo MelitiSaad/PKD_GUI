@@ -23,22 +23,25 @@ def _label_mask(seg: Segmentation, label_id: int, z: Optional[int]) -> np.ndarra
     return src == np.uint16(label_id)
 
 
-def paintable_mask(current_values: np.ndarray, value: int, protect_existing: bool) -> np.ndarray:
+def paintable_mask(current_values: np.ndarray, value: int, protect_existing: bool,
+                   erase_label: int | None = None) -> np.ndarray:
     """Return voxels a brush may modify under the selected paint policy.
 
     Protected painting adds only to background (and permits repainting the active
     label), while erasing deliberately remains unrestricted.  Keeping the rule
     in the Qt-free core makes it easy to reuse for future lasso/threshold tools.
     """
+    if value == 0 and erase_label is not None:
+        return np.asarray(current_values) == np.uint16(erase_label)
     if not protect_existing or value == 0:
         return np.ones(np.asarray(current_values).shape, dtype=bool)
     values = np.asarray(current_values)
     return (values == 0) | (values == np.uint16(value))
 
 
-# ------------------------------------------------------------ polygon / lasso
-def rasterize_polygon(shape: tuple[int, int], vertices) -> np.ndarray:
-    """Return a pixel-centre mask for a closed polygon in display coordinates.
+# ---------------------------------------------------------------------- lasso
+def rasterize_lasso(shape: tuple[int, int], vertices) -> np.ndarray:
+    """Return a pixel-centre mask for a closed freehand contour.
 
     ``vertices`` are ``(vertical, horizontal)`` points, matching the plane-view
     convention.  The compact ray-casting implementation deliberately has no UI
@@ -69,26 +72,27 @@ def rasterize_polygon(shape: tuple[int, int], vertices) -> np.ndarray:
     return out
 
 
-def apply_polygon_plane(seg: Segmentation, plane, cursor, vertices, value: int,
-                        protect_existing: bool = True) -> Optional[EditCommand]:
-    """Apply one polygon add/remove operation to one MPR plane as one command.
+def apply_lasso_plane(seg: Segmentation, plane, cursor, vertices, value: int,
+                      protect_existing: bool = True, remove_label: int | None = None) -> Optional[EditCommand]:
+    """Apply one lasso add/remove operation to one MPR plane as one command.
 
     The current plane is rasterised then mapped through ``plane`` rather than
     assuming axial storage.  Therefore coronal and sagittal corrections modify
     the same physical voxels without altering image geometry or affine data.
     """
     current = plane.slice2d(seg.data, cursor)
-    mask = rasterize_polygon(current.shape, vertices)
+    mask = rasterize_lasso(current.shape, vertices)
     if not mask.any():
         return None
     updated = current.copy()
     if value == 0:
-        updated[mask] = 0
-        description = "polygon remove"
+        removable = mask if remove_label is None else mask & (current == np.uint16(remove_label))
+        updated[removable] = 0
+        description = "lasso remove"
     else:
         writable = mask & paintable_mask(current, value, protect_existing)
         updated[writable] = np.uint16(value)
-        description = "polygon add"
+        description = "lasso add"
     return commands.apply_plane_slice(seg, plane, cursor, updated, description)
 
 

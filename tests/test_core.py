@@ -92,6 +92,12 @@ def test_flood_fill():
     assert int((seg.data[:, :, 3] == 4).sum()) == 64  # whole square recolored
 
 
+def test_safe_erase_mask_only_targets_active_label():
+    values = np.array([0, 1, 2, 1], dtype=np.uint16)
+    assert np.array_equal(segops.paintable_mask(values, 0, True, erase_label=1),
+                          np.array([False, True, False, True]))
+
+
 def test_grow_and_shrink_3d():
     seg = make_seg()
     before = int((seg.data == 1).sum())
@@ -252,20 +258,20 @@ def test_flood_fill_plane():
     assert int((seg.data == 3).sum()) == 0
 
 
-# --------------------------------------------------------------- polygon / lasso
-def test_polygon_rasterization_and_plane_add_remove_undo():
+# ---------------------------------------------------------------------- lasso
+def test_lasso_rasterization_and_plane_add_remove_undo():
     from pkdqc.core.planes import PLANES, AXIAL
     from pkdqc.core import segops
     seg = Segmentation(np.zeros((16, 16, 5), dtype=np.uint16))
     plane = PLANES[AXIAL]
     cursor = [8, 8, 2]
     vertices = [(3, 3), (3, 11), (11, 11), (11, 3)]
-    mask = segops.rasterize_polygon((16, 16), vertices)
+    mask = segops.rasterize_lasso((16, 16), vertices)
     assert mask.shape == (16, 16)
     assert mask[5, 5] and not mask[1, 1]
 
     hist = History(seg)
-    add = segops.apply_polygon_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
+    add = segops.apply_lasso_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
     assert add is not None
     hist.push(add)
     added = int((seg.data[:, :, 2] == 2).sum())
@@ -276,28 +282,46 @@ def test_polygon_rasterization_and_plane_add_remove_undo():
     hist.redo()
     assert int((seg.data == 2).sum()) == added
 
-    remove = segops.apply_polygon_plane(seg, plane, cursor, vertices, 0)
+    remove = segops.apply_lasso_plane(seg, plane, cursor, vertices, 0)
     assert remove is not None
     hist.push(remove)
     assert int((seg.data == 2).sum()) == 0
     hist.undo()
     assert int((seg.data == 2).sum()) == added
 
+    seg.data[5, 5, 2] = 8
+    protected_remove = segops.apply_lasso_plane(seg, plane, cursor, vertices, 0, remove_label=2)
+    assert protected_remove is not None
+    assert seg.data[5, 5, 2] == 8  # remove affects only the active label
 
-def test_polygon_protect_labels_and_coronal_geometry():
+
+def test_lasso_protect_labels_and_coronal_geometry():
     from pkdqc.core.planes import PLANES, CORONAL
     from pkdqc.core import segops
     seg = Segmentation(np.zeros((12, 12, 12), dtype=np.uint16))
-    # The polygon occupies display rows Z=3..8 and columns X=3..8 at Y=6.
+    # The lasso occupies display rows Z=3..8 and columns X=3..8 at Y=6.
     seg.data[5, 6, 5] = 9
     plane = PLANES[CORONAL]
     cursor = [6, 6, 6]
     vertices = [(3, 3), (3, 9), (9, 9), (9, 3)]
-    cmd = segops.apply_polygon_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
+    cmd = segops.apply_lasso_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
     assert cmd is not None
     assert seg.data[5, 6, 5] == 9  # never overwrite a protected label
     assert seg.data[4, 6, 4] == 2  # plane mapping writes X,Y,Z, not axial-only
     assert np.count_nonzero(seg.data[:, 6, :] == 2) > 0
+
+
+def test_freehand_lasso_contour_and_sagittal_mapping():
+    from pkdqc.core.planes import PLANES, SAGITTAL
+    from pkdqc.core import segops
+    seg = Segmentation(np.zeros((14, 14, 14), dtype=np.uint16))
+    # An irregular freehand contour, unlike the former rectangle-like selection.
+    contour = [(3, 4), (4, 8), (6, 10), (9, 8), (10, 5), (8, 3), (5, 3)]
+    mask = segops.rasterize_lasso((14, 14), contour)
+    assert mask[6, 6] and not mask[2, 2]
+    cmd = segops.apply_lasso_plane(seg, PLANES[SAGITTAL], [7, 7, 7], contour, 4)
+    assert cmd is not None
+    assert np.count_nonzero(seg.data[7, :, :] == 4) == int(mask.sum())
 
 
 # --------------------------------------------------------------- display aspect
