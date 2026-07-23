@@ -21,10 +21,10 @@ from typing import Optional
 
 import numpy as np
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
-    QMenu, QMessageBox, QSlider, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
+    QMenu, QMessageBox, QSlider, QSpinBox, QToolBar, QToolButton, QToolTip, QVBoxLayout,
     QWidget,
 )
 
@@ -58,7 +58,7 @@ TOOL_HINTS = {
     "pan": "Left-drag moves the image · right-drag zooms · wheel changes slice",
     "brush": "Left paints the active object · right erases · Alt+wheel or [ ] resizes",
     "fill": "Left fills the connected region · right clears it",
-    "lasso": "Drag to outline a region · release to preview · choose Add or Remove",
+    "lasso": "Left-drag adds the active object · right-drag removes it",
 }
 
 # one-shot operations (never in the tool rail)
@@ -85,8 +85,6 @@ _SHORTCUTS = {
     "brush_plus": ("Larger brush", "]"),
     "brush_threshold": ("Threshold brush", "T"),
     "brush_protect": ("Protect labels", ""),
-    "lasso_add": ("Add lasso selection", ""),
-    "lasso_remove": ("Remove lasso selection", ""),
     "reset_view": ("Reset zoom", "Ctrl+0"),
     "update_3d": ("Update 3D", "F5"),
     "contrast": ("Contrast\u2026", "C"),
@@ -120,7 +118,6 @@ class MainWindow(QMainWindow):
         self.session: Optional[Session] = None
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
-        self._tool_before_polygon = "crosshair"
         self._enable_3d = enable_3d and volume_view.available()
 
         self.act: dict[str, QAction] = {}
@@ -137,7 +134,6 @@ class MainWindow(QMainWindow):
         self.controller = ToolController(self.ortho, self)
         self.controller.brushRadiusChanged.connect(self._on_brush_changed)
         self.controller.edited.connect(self._on_edited)
-        self.controller.polygonFinished.connect(self._restore_after_polygon)
         self._connect()
         self._set_tool("crosshair")
 
@@ -183,7 +179,6 @@ class MainWindow(QMainWindow):
         self._mk("contrast", "threshold"); self._mk("remove_unused")
         self._mk("brush_threshold", checkable=True)
         self._mk("brush_protect", checkable=True); self.act["brush_protect"].setChecked(True)
-        self._mk("lasso_add"); self._mk("lasso_remove")
         self._mk("continuous_3d", checkable=True)
         self._mk("axes_3d", checkable=True); self.act["axes_3d"].setChecked(True)
 
@@ -232,13 +227,11 @@ class MainWindow(QMainWindow):
         for aid in ("load_seg", "save", "new_seg"):
             m_seg.addAction(self.act[aid])
         m_seg.addSeparator()
+        m_cleanup = m_seg.addMenu("Clean up")
         for oid, _l, _i, _k in OPERATIONS:
-            m_seg.addAction(self.act[oid])
-        m_seg.addSeparator()
-        m_seg.addAction(self.act["remove_unused"])
-        m_advanced = m_seg.addMenu("Advanced correction")
-        m_advanced.addAction(self.act["polygon_add"])
-        m_advanced.addAction(self.act["polygon_remove"])
+            m_cleanup.addAction(self.act[oid])
+        m_cleanup.addSeparator()
+        m_cleanup.addAction(self.act["remove_unused"])
 
         m_tools = mb.addMenu("&Tools")
         for tid, _l, _i, _k in TOOLS:
@@ -295,7 +288,7 @@ class MainWindow(QMainWindow):
         top.addSeparator()
 
         self.btn_cleanup = QToolButton()
-        self.btn_cleanup.setText("Clean up")
+        self.btn_cleanup.setText("Cleanup")
         self.btn_cleanup.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_cleanup.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.btn_cleanup)
@@ -305,14 +298,6 @@ class MainWindow(QMainWindow):
         self.btn_cleanup.setMenu(menu)
         top.addWidget(self.btn_cleanup)
         top.addAction(self.act["contrast"])
-        self.lasso_controls = QWidget()
-        ph = QHBoxLayout(self.lasso_controls); ph.setContentsMargins(8, 0, 0, 0); ph.setSpacing(3)
-        ph.addWidget(QLabel("Lasso"))
-        for aid in ("lasso_add", "lasso_remove"):
-            b = QToolButton(); b.setDefaultAction(self.act[aid]); b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            ph.addWidget(b)
-        self.lasso_controls.setVisible(False)
-        top.addWidget(self.lasso_controls)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, top)
 
     def _build_view_bar(self):
@@ -370,9 +355,7 @@ class MainWindow(QMainWindow):
         self.act["brush_minus"].triggered.connect(lambda: self._nudge_brush(-1))
         self.act["brush_plus"].triggered.connect(lambda: self._nudge_brush(+1))
         self.act["brush_threshold"].toggled.connect(self._on_threshold_toggled)
-        self.act["brush_protect"].toggled.connect(self.controller.set_protect_existing)
-        self.act["lasso_add"].triggered.connect(lambda: self.controller.apply_lasso("add"))
-        self.act["lasso_remove"].triggered.connect(lambda: self.controller.apply_lasso("remove"))
+        self.act["brush_protect"].toggled.connect(self._on_protect_toggled)
         self.act["reset_view"].triggered.connect(self._reset_view)
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
@@ -391,7 +374,7 @@ class MainWindow(QMainWindow):
         self.slice_slider.valueChanged.connect(self.ortho.set_axial_slice)
         self.brush_spin.valueChanged.connect(self._on_spin_brush)
         self.brush_mode.currentTextChanged.connect(self._on_brush_mode)
-        self.panel.activeLabelChanged.connect(lambda _id: self.ortho.redraw_overlay())
+        self.panel.activeLabelChanged.connect(self._on_active_label_changed)
         self.panel.overlayChanged.connect(self._on_overlay_changed)
         self.panel.deleteLabelRequested.connect(self._delete_label)
 
@@ -407,13 +390,23 @@ class MainWindow(QMainWindow):
     def _set_tool(self, name):
         self.controller.set_tool(name)
         self.act[name].setChecked(True)
-        self.lbl_tool.setText(f"  {_SHORTCUTS[name][0]}")
-        self.lbl_hint.setText("   " + TOOL_HINTS.get(name, ""))
+        self._update_tool_feedback(name)
         is_brush = name == "brush"
         self.brush_spin.setEnabled(is_brush)
         self.brush_mode.setEnabled(is_brush)
-        self.act["brush_protect"].setEnabled(is_brush)
-        self.lasso_controls.setVisible(name == "lasso")
+        self.act["brush_protect"].setEnabled(name in {"brush", "lasso"})
+
+    def _update_tool_feedback(self, name=None):
+        name = name or self.controller.tool
+        label = _SHORTCUTS[name][0]
+        protected = self.act["brush_protect"].isChecked()
+        policy = " · Protect Labels on" if protected and name in {"brush", "lasso"} else ""
+        self.lbl_tool.setText(f"  {label}{policy}")
+        self.lbl_hint.setText("   " + TOOL_HINTS.get(name, ""))
+
+    def _on_protect_toggled(self, enabled):
+        self.controller.set_protect_existing(enabled)
+        self._update_tool_feedback()
 
     @gui_guard
 
@@ -488,7 +481,14 @@ class MainWindow(QMainWindow):
     @gui_guard
     def _on_label_picked(self, lid):
         self.panel.select_label(lid)
-        self.statusBar().showMessage(f"Selected object: {self.panel.label_name(lid)} (#{lid})", 3000)
+        self.ortho.set_selected_label(lid)
+        summary = self.panel.selection_summary(lid)
+        self.statusBar().showMessage(f"Selected {self.panel.label_name(lid)} (#{lid})", 3000)
+        QToolTip.showText(QCursor.pos(), summary, self, self.rect(), 3500)
+
+    def _on_active_label_changed(self, lid):
+        self.ortho.set_selected_label(lid)
+        self.ortho.redraw_overlay()
 
     # ================================================================ layout / view
     def _on_layout_changed(self, mode):

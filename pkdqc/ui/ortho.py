@@ -70,19 +70,20 @@ class _PlaneViewBox(pg.ViewBox):
         btn = ev.button()
         tool = o.tool_name()
 
-        # Middle-drag always pans, whatever the tool. Right-drag always zooms,
-        # except for painting tools where right means erase.
+        # Middle-drag always pans. Right-drag zooms except when the active editing
+        # tool uses it as its scoped erase gesture (Brush or Lasso).
         if btn == Qt.MouseButton.MiddleButton:
             super().mouseDragEvent(ev, axis)
             return
 
-        if o.tool_is_lasso() and btn == Qt.MouseButton.LeftButton:
+        if o.tool_is_lasso() and btn in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             ev.accept()
             v, h = self._vh(ev.scenePos())
+            right = btn == Qt.MouseButton.RightButton
             if ev.isStart():
                 o.lasso_start(self.w.plane, v, h)
             elif ev.isFinish():
-                o.lasso_end(self.w.plane, v, h)
+                o.lasso_end(self.w.plane, v, h, right)
             else:
                 o.lasso_move(self.w.plane, v, h)
             return
@@ -123,9 +124,7 @@ class _PlaneViewBox(pg.ViewBox):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             ev.accept()
             v, h = self._vh(ev.scenePos())
-            if o.tool_is_polygon():
-                o.polygon_click(self.w.plane, v, h, finish=right)
-            elif o.tool_is_paint() or o.tool_is_click():
+            if o.tool_is_paint() or o.tool_is_click():
                 o.paint_click(self.w.plane, v, h, right)
             elif not right:
                 o.navigate_click(self.w.plane, v, h)
@@ -133,12 +132,6 @@ class _PlaneViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
-        o = self.w.owner
-        if o.tool_is_polygon() and ev.button() == Qt.MouseButton.LeftButton:
-            v, h = self._vh(ev.scenePos())
-            o.polygon_click(self.w.plane, v, h, finish=True)
-            ev.accept()
-            return
         self.w.owner.toggle_maximize(self.w.plane.name)
         ev.accept()
 
@@ -188,8 +181,10 @@ class PlaneWidget(QWidget):
 
         self.img_item = pg.ImageItem()
         self.seg_item = pg.ImageItem(); self.seg_item.setZValue(10)
+        self.selected_item = pg.ImageItem(); self.selected_item.setZValue(11)
         self.vb.addItem(self.img_item)
         self.vb.addItem(self.seg_item)
+        self.vb.addItem(self.selected_item)
 
         pen = QPen(QColor(theme.ACCENT)); pen.setCosmetic(True); pen.setWidthF(0.8)
         pen.setStyle(Qt.PenStyle.DashLine)
@@ -210,6 +205,8 @@ class PlaneWidget(QWidget):
         self._overlay_timer = QTimer(self); self._overlay_timer.setSingleShot(True)
         self._overlay_timer.timeout.connect(self._flush_overlay)
         self._overlay_dirty = None
+        self._lasso_flash_timer = QTimer(self); self._lasso_flash_timer.setSingleShot(True)
+        self._lasso_flash_timer.timeout.connect(lambda: self.set_lasso((), None, False))
         self.glw.scene().sigMouseMoved.connect(self._hover)
 
     def refresh(self):
@@ -227,11 +224,28 @@ class PlaneWidget(QWidget):
     def _refresh_overlay(self):
         seg = self.owner.seg
         if seg is None:
-            self.seg_item.clear(); return
+            self.seg_item.clear(); self.selected_item.clear(); return
         lut = seg.labels.lut()
         max_id = max(1, lut.shape[0] - 1)
-        self.seg_item.setImage(self.plane.slice2d(seg.data, self.owner.cursor),
-                               autoLevels=False, levels=(0, max_id), lut=lut)
+        current = self.plane.slice2d(seg.data, self.owner.cursor)
+        self.seg_item.setImage(current, autoLevels=False, levels=(0, max_id), lut=lut)
+        selected = self.owner.selected_label_id
+        if selected is None:
+            self.selected_item.clear()
+            return
+        lab = seg.labels.labels.get(selected)
+        if lab is None or not lab.visible:
+            self.selected_item.clear()
+            return
+        # A lightweight alpha mask makes the selected object obvious without
+        # altering the label overlay or adding work to live brush strokes.
+        mask = current == np.uint16(selected)
+        if not mask.any():
+            self.selected_item.clear()
+            return
+        color = np.array([[0, 0, 0, 0], [*lab.color, 76]], dtype=np.uint8)
+        self.selected_item.setImage(mask.astype(np.uint8), autoLevels=False,
+                                    levels=(0, 1), lut=color)
 
     def redraw_overlay(self):
         """Coalesce pointer-rate overlay uploads into one event-loop frame.
@@ -257,6 +271,14 @@ class PlaneWidget(QWidget):
                 path.closeSubpath()
         self.lasso.setPath(path)
         self.lasso.setVisible(bool(visible and vertices))
+
+    def stop_lasso_flash(self):
+        self._lasso_flash_timer.stop()
+
+    def flash_lasso(self, vertices):
+        """Leave the closed contour visible briefly after its edit is committed."""
+        self.set_lasso(vertices, visible=True)
+        self._lasso_flash_timer.start(160)
 
     def set_levels(self, win):
         self.img_item.setLevels(win)
@@ -293,7 +315,6 @@ class PlaneWidget(QWidget):
             rh = rv * vsp / hsp if hsp > 0 else rv
             self.brush.setRect(h - rh, v - rv, 2 * rh + 1, 2 * rv + 1)
             self.owner.on_hover(self.plane, v, h)
-            self.owner.polygon_hover(self.plane, v, h)
 
 
 class OrthoView(QWidget):
@@ -310,6 +331,7 @@ class OrthoView(QWidget):
         self.cursor = [0, 0, 0]
         self.window = (0.0, 1.0)
         self.controller = None
+        self.selected_label_id = None
         self.continuous_3d = False
         self._layout_mode = "grid"
         self._enable_3d = enable_3d and volume_view.available()
@@ -317,6 +339,10 @@ class OrthoView(QWidget):
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(2, 2, 2, 2)
         self.grid.setSpacing(2)
+        self.empty_hint = QLabel("Open an image to begin\n\nLoad a CT or MRI volume, then review or add a segmentation.")
+        self.empty_hint.setObjectName("EmptyState")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setWordWrap(True)
 
         self.planes: Dict[str, PlaneWidget] = {name: PlaneWidget(PLANES[name], self) for name in ORDER}
 
@@ -337,9 +363,12 @@ class OrthoView(QWidget):
 
     # -- layout ----------------------------------------------------------
     def _relayout(self):
-        for w in self._cells.values():
+        for w in (*self._cells.values(), self.empty_hint):
             self.grid.removeWidget(w); w.hide()
-        if self._layout_mode == "grid":
+        if self.image is None:
+            self.grid.addWidget(self.empty_hint, 0, 0, 2, 2)
+            self.empty_hint.show()
+        elif self._layout_mode == "grid":
             self.grid.addWidget(self._cells[ORDER[0]], 0, 0)
             self.grid.addWidget(self._cells[ORDER[1]], 0, 1)
             self.grid.addWidget(self._cells[ORDER[2]], 1, 0)
@@ -372,6 +401,8 @@ class OrthoView(QWidget):
     def set_data(self, image, seg):
         self.image = image
         self.seg = seg
+        self.selected_label_id = int(seg.active_id) if seg is not None else None
+        self._relayout()
         self.window = image.default_window if image is not None else (0.0, 1.0)
         self.cursor = [s // 2 for s in image.shape] if image is not None else [0, 0, 0]
         for p in self.planes.values():
@@ -395,6 +426,10 @@ class OrthoView(QWidget):
         for p in self.planes.values():
             p.refresh()
 
+    def set_selected_label(self, lid: int | None):
+        self.selected_label_id = None if lid is None else int(lid)
+        self.redraw_overlay()
+
     def redraw_overlay(self, plane=None):
         """Refresh a segmentation overlay.
 
@@ -411,12 +446,17 @@ class OrthoView(QWidget):
 
     def set_lasso_preview(self, plane, vertices, hover=None):
         for name, widget in self.planes.items():
+            widget.stop_lasso_flash()
             widget.set_lasso(vertices if name == plane.name else (), hover if name == plane.name else None,
-                               name == plane.name)
+                             name == plane.name)
 
     def clear_lasso_preview(self):
         for widget in self.planes.values():
+            widget.stop_lasso_flash()
             widget.set_lasso((), None, False)
+
+    def flash_lasso(self, plane, vertices):
+        self.planes[plane.name].flash_lasso(vertices)
 
     # -- cursor / navigation --------------------------------------------
     def set_cursor(self, i, j, k):
@@ -516,9 +556,9 @@ class OrthoView(QWidget):
         if self.controller:
             self.controller.lasso_move(plane, v, h)
 
-    def lasso_end(self, plane, v, h):
+    def lasso_end(self, plane, v, h, right=False):
         if self.controller:
-            self.controller.lasso_end(plane, v, h)
+            self.controller.lasso_end(plane, v, h, right)
 
     def on_hover(self, plane, v, h):
         self.hovered.emit(*plane.disp_to_vox(v, h, self.cursor, self.image.shape))
