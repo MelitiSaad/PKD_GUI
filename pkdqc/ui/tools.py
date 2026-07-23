@@ -1,0 +1,183 @@
+"""The editing brain (plane-aware).
+
+Owns the active tool and turns interaction in any of the three orthogonal panes
+into undoable :class:`EditCommand`s. Freehand strokes are gap-filled and
+collapse into one undo step; fill and morphology run as single commands. The
+plane geometry in ``core.planes`` maps every 2D interaction to the right voxels,
+so painting is correct in axial, coronal, and sagittal alike.
+"""
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
+import numpy as np
+from PySide6.QtCore import QObject, Signal
+
+from ..config import DEFAULT_BRUSH_RADIUS, MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS
+from ..core import segops
+from ..core.commands import StrokeRecorder
+from ..core.history import History
+from ..core.segops import disk_offsets
+
+PAINT_TOOLS = {"brush"}
+BRUSH_MODES = ("normal", "threshold")
+CLICK_TOOLS = {"fill"}
+
+
+class ToolController(QObject):
+    brushRadiusChanged = Signal(int)
+    toolChanged = Signal(str)
+    edited = Signal()
+
+    def __init__(self, ortho, parent=None):
+        super().__init__(parent)
+        self.ortho = ortho
+        self.image = None
+        self.seg = None
+        self.history: Optional[History] = None
+        self.tool = "crosshair"
+        self.brush_mode = "normal"
+        self.brush_radius = DEFAULT_BRUSH_RADIUS
+        self.threshold_band: Optional[Tuple[float, float]] = None
+        self.morph_3d = True
+        self.island_min = 20
+        self._rec: Optional[StrokeRecorder] = None
+        self._last_vh: Optional[Tuple[int, int]] = None
+        self._paint_val: int = 0
+        ortho.set_controller(self)
+
+    # -- context ---------------------------------------------------------
+    def set_context(self, image, seg, history: History) -> None:
+        self.image = image
+        self.seg = seg
+        self.history = history
+        self.threshold_band = image.default_window if image is not None else None
+
+    def set_tool(self, name: str) -> None:
+        self.tool = name
+        self.ortho.set_brush_visible(name in PAINT_TOOLS)
+        self.ortho.set_brush_radius(self.brush_radius)
+        self.toolChanged.emit(name)
+
+    def set_brush_mode(self, mode: str) -> None:
+        if mode in BRUSH_MODES:
+            self.brush_mode = mode
+
+    def set_brush_radius(self, r: int) -> None:
+        self.brush_radius = int(np.clip(r, MIN_BRUSH_RADIUS, MAX_BRUSH_RADIUS))
+        self.ortho.set_brush_radius(self.brush_radius)
+        self.brushRadiusChanged.emit(self.brush_radius)
+
+    def wheel_brush(self, steps: int) -> None:
+        self.set_brush_radius(self.brush_radius + steps)
+
+    # -- stamping --------------------------------------------------------
+    def _value_for(self, right: bool) -> int:
+        """Left button draws the active object, right button erases."""
+        return 0 if right else int(self.seg.active_id)
+
+    def _plane_stamp(self, plane, v: int, h: int, value: int) -> None:
+        if self._rec is None:
+            return
+        dv, dh = disk_offsets(self.brush_radius)
+        vv = v + dv
+        hh = h + dh
+        shape = self.seg.data.shape
+        ii, jj, kk = plane.disp_to_vox_arrays(vv, hh, self.ortho.cursor, shape)
+        if self.brush_mode == "threshold" and value != 0 and self.threshold_band is not None and self.image is not None:
+            R, C, S = shape
+            m = (ii >= 0) & (ii < R) & (jj >= 0) & (jj < C) & (kk >= 0) & (kk < S)
+            ii, jj, kk = ii[m], jj[m], kk[m]
+            lo, hi = self.threshold_band
+            vals = self.image.data[ii, jj, kk]
+            keep = (vals >= lo) & (vals <= hi)
+            ii, jj, kk = ii[keep], jj[keep], kk[keep]
+        self._rec.stamp_voxels(ii, jj, kk, value)
+
+    def _plane_stamp_line(self, plane, v0, h0, v1, h1, value) -> None:
+        n = int(max(abs(v1 - v0), abs(h1 - h0)))
+        if n <= 1:
+            self._plane_stamp(plane, v1, h1, value)
+            return
+        vs = np.linspace(v0, v1, n + 1).round().astype(int)
+        hs = np.linspace(h0, h1, n + 1).round().astype(int)
+        for v, h in zip(vs, hs):
+            self._plane_stamp(plane, int(v), int(h), value)
+
+    # -- paint interaction (from OrthoView) ------------------------------
+    def plane_paint_start(self, plane, v, h, right=False) -> None:
+        if self.seg is None:
+            return
+        self._paint_val = self._value_for(right)
+        self._rec = StrokeRecorder(self.seg, self.tool)
+        self._last_vh = (v, h)
+        self._plane_stamp(plane, v, h, self._paint_val)
+        self.ortho.redraw_overlay()
+
+    def plane_paint_move(self, plane, v, h, right=False) -> None:
+        if self._rec is None:
+            return
+        v0, h0 = self._last_vh
+        self._plane_stamp_line(plane, v0, h0, v, h, self._paint_val)
+        self._last_vh = (v, h)
+        self.ortho.redraw_overlay()
+
+    def plane_paint_end(self) -> None:
+        if self._rec is None:
+            return
+        cmd = self._rec.commit()
+        self._rec = None
+        self._last_vh = None
+        if cmd is not None and self.history is not None:
+            self.history.push(cmd)
+            self.ortho.redraw_overlay()
+            self.ortho.notify_edit()
+            self.edited.emit()
+
+    def plane_paint_click(self, plane, v, h, right=False) -> None:
+        if self.seg is None or self.history is None:
+            return
+        if self.tool in CLICK_TOOLS:
+            value = 0 if right else int(self.seg.active_id)
+            cmd = segops.flood_fill_plane(self.seg, plane, self.ortho.cursor, v, h, value)
+        else:
+            self._rec = StrokeRecorder(self.seg, self.tool)
+            self._plane_stamp(plane, v, h, self._value_for(right))
+            cmd = self._rec.commit()
+            self._rec = None
+        if cmd is not None:
+            self.history.push(cmd)
+            self.ortho.redraw_overlay()
+            self.ortho.notify_edit()
+            self.edited.emit()
+
+    # -- region actions (toolbar) ---------------------------------------
+    def _run(self, cmd) -> None:
+        if cmd is not None and self.history is not None:
+            self.history.push(cmd)
+            self.ortho.redraw_overlay()
+            self.ortho.notify_edit()
+            self.edited.emit()
+
+    def apply_grow(self) -> None:
+        self._run(segops.grow(self.seg, int(self.seg.active_id), 1, self.morph_3d, self.ortho.z))
+
+    def apply_shrink(self) -> None:
+        self._run(segops.shrink(self.seg, int(self.seg.active_id), 1, self.morph_3d, self.ortho.z))
+
+    def apply_remove_islands(self) -> None:
+        self._run(segops.remove_islands(self.seg, int(self.seg.active_id),
+                                        self.island_min, self.morph_3d, self.ortho.z))
+
+    def apply_fill_holes(self) -> None:
+        self._run(segops.fill_holes(self.seg, int(self.seg.active_id), self.morph_3d, self.ortho.z))
+
+    def apply_interpolate(self) -> None:
+        if self.seg is None:
+            return
+        lid = int(self.seg.active_id)
+        S = self.seg.data.shape[2]
+        annotated = [z for z in range(S) if (self.seg.data[:, :, z] == lid).any()]
+        for a, b in zip(annotated, annotated[1:]):
+            if b - a > 1:
+                self._run(segops.interpolate_between(self.seg, lid, a, b))
