@@ -83,6 +83,8 @@ _SHORTCUTS = {
     "brush_plus": ("Larger brush", "]"),
     "brush_threshold": ("Threshold brush", "T"),
     "brush_protect": ("Protect labels", ""),
+    "polygon_add": ("Polygon add", "P"),
+    "polygon_remove": ("Polygon remove", "Shift+P"),
     "reset_view": ("Reset zoom", "Ctrl+0"),
     "update_3d": ("Update 3D", "F5"),
     "contrast": ("Contrast\u2026", "C"),
@@ -116,6 +118,7 @@ class MainWindow(QMainWindow):
         self.session: Optional[Session] = None
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
+        self._tool_before_polygon = "crosshair"
         self._enable_3d = enable_3d and volume_view.available()
 
         self.act: dict[str, QAction] = {}
@@ -132,6 +135,7 @@ class MainWindow(QMainWindow):
         self.controller = ToolController(self.ortho, self)
         self.controller.brushRadiusChanged.connect(self._on_brush_changed)
         self.controller.edited.connect(self._on_edited)
+        self.controller.polygonFinished.connect(self._restore_after_polygon)
         self._connect()
         self._set_tool("crosshair")
 
@@ -177,6 +181,7 @@ class MainWindow(QMainWindow):
         self._mk("contrast", "threshold"); self._mk("remove_unused")
         self._mk("brush_threshold", checkable=True)
         self._mk("brush_protect", checkable=True); self.act["brush_protect"].setChecked(True)
+        self._mk("polygon_add", checkable=True); self._mk("polygon_remove", checkable=True)
         self._mk("continuous_3d", checkable=True)
         self._mk("axes_3d", checkable=True); self.act["axes_3d"].setChecked(True)
 
@@ -229,6 +234,9 @@ class MainWindow(QMainWindow):
             m_seg.addAction(self.act[oid])
         m_seg.addSeparator()
         m_seg.addAction(self.act["remove_unused"])
+        m_advanced = m_seg.addMenu("Advanced correction")
+        m_advanced.addAction(self.act["polygon_add"])
+        m_advanced.addAction(self.act["polygon_remove"])
 
         m_tools = mb.addMenu("&Tools")
         for tid, _l, _i, _k in TOOLS:
@@ -295,6 +303,14 @@ class MainWindow(QMainWindow):
         self.btn_cleanup.setMenu(menu)
         top.addWidget(self.btn_cleanup)
         top.addAction(self.act["contrast"])
+        self.polygon_controls = QWidget()
+        ph = QHBoxLayout(self.polygon_controls); ph.setContentsMargins(8, 0, 0, 0); ph.setSpacing(3)
+        ph.addWidget(QLabel("Polygon"))
+        for aid in ("polygon_add", "polygon_remove"):
+            b = QToolButton(); b.setDefaultAction(self.act[aid]); b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            ph.addWidget(b)
+        self.polygon_controls.setVisible(False)
+        top.addWidget(self.polygon_controls)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, top)
 
     def _build_view_bar(self):
@@ -353,6 +369,8 @@ class MainWindow(QMainWindow):
         self.act["brush_plus"].triggered.connect(lambda: self._nudge_brush(+1))
         self.act["brush_threshold"].toggled.connect(self._on_threshold_toggled)
         self.act["brush_protect"].toggled.connect(self.controller.set_protect_existing)
+        self.act["polygon_add"].triggered.connect(lambda: self._activate_polygon("add"))
+        self.act["polygon_remove"].triggered.connect(lambda: self._activate_polygon("remove"))
         self.act["reset_view"].triggered.connect(self._reset_view)
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
@@ -393,6 +411,24 @@ class MainWindow(QMainWindow):
         self.brush_spin.setEnabled(is_brush)
         self.brush_mode.setEnabled(is_brush)
         self.act["brush_protect"].setEnabled(is_brush)
+        self.polygon_controls.setVisible(name == "polygon")
+
+    @gui_guard
+    def _activate_polygon(self, mode):
+        if self.controller.tool != "polygon":
+            self._tool_before_polygon = self.controller.tool
+        self.controller.set_polygon_mode(mode)
+        self.controller.set_tool("polygon")
+        self.act["polygon_add"].blockSignals(True); self.act["polygon_remove"].blockSignals(True)
+        self.act["polygon_add"].setChecked(mode == "add")
+        self.act["polygon_remove"].setChecked(mode == "remove")
+        self.act["polygon_add"].blockSignals(False); self.act["polygon_remove"].blockSignals(False)
+        self.lbl_tool.setText("  Polygon")
+        self.lbl_hint.setText("   Click points · double-click or right-click to apply · Esc switches tool")
+        self.polygon_controls.setVisible(True)
+
+    def _restore_after_polygon(self):
+        self._set_tool(self._tool_before_polygon)
 
     def _on_brush_mode(self, text):
         self.controller.set_brush_mode("threshold" if text == "Threshold" else "normal")

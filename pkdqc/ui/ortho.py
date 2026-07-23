@@ -25,9 +25,9 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph import functions as fn
 from PySide6.QtCore import QRectF, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtGui import QColor, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QGraphicsEllipseItem, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QGraphicsEllipseItem, QGraphicsPathItem, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from .. import theme
@@ -112,7 +112,9 @@ class _PlaneViewBox(pg.ViewBox):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             ev.accept()
             v, h = self._vh(ev.scenePos())
-            if o.tool_is_paint() or o.tool_is_click():
+            if o.tool_is_polygon():
+                o.polygon_click(self.w.plane, v, h, finish=right)
+            elif o.tool_is_paint() or o.tool_is_click():
                 o.paint_click(self.w.plane, v, h, right)
             elif not right:
                 o.navigate_click(self.w.plane, v, h)
@@ -120,6 +122,12 @@ class _PlaneViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
+        o = self.w.owner
+        if o.tool_is_polygon() and ev.button() == Qt.MouseButton.LeftButton:
+            v, h = self._vh(ev.scenePos())
+            o.polygon_click(self.w.plane, v, h, finish=True)
+            ev.accept()
+            return
         self.w.owner.toggle_maximize(self.w.plane.name)
         ev.accept()
 
@@ -183,7 +191,14 @@ class PlaneWidget(QWidget):
         self.brush.setBrush(Qt.BrushStyle.NoBrush); self.brush.setZValue(20)
         self.brush.setVisible(False)
         self.vb.addItem(self.brush)
+        self.polygon = QGraphicsPathItem(); self.polygon.setZValue(21)
+        ppen = QPen(QColor(theme.ACCENT)); ppen.setCosmetic(True); ppen.setWidthF(1.8)
+        self.polygon.setPen(ppen); self.polygon.setVisible(False)
+        self.vb.addItem(self.polygon)
         self._brush_r = 4
+        self._overlay_timer = QTimer(self); self._overlay_timer.setSingleShot(True)
+        self._overlay_timer.timeout.connect(self._flush_overlay)
+        self._overlay_dirty = None
         self.glw.scene().sigMouseMoved.connect(self._hover)
 
     def refresh(self):
@@ -208,7 +223,27 @@ class PlaneWidget(QWidget):
                                autoLevels=False, levels=(0, max_id), lut=lut)
 
     def redraw_overlay(self):
+        """Coalesce pointer-rate overlay uploads into one event-loop frame.
+
+        A live brush can emit many stamps before Qt paints.  Keeping only one
+        queued upload avoids repeatedly converting/uploading the same slice,
+        while the mutable segmentation array remains the source of truth.
+        """
+        if not self._overlay_timer.isActive():
+            self._overlay_timer.start(0)
+
+    def _flush_overlay(self):
         self._refresh_overlay()
+
+    def set_polygon(self, vertices, hover=None, visible=False):
+        path = QPainterPath()
+        if vertices:
+            v, h = vertices[0]; path.moveTo(h + .5, v + .5)
+            for v, h in vertices[1:]: path.lineTo(h + .5, v + .5)
+            if hover is not None:
+                v, h = hover; path.lineTo(h + .5, v + .5)
+        self.polygon.setPath(path)
+        self.polygon.setVisible(bool(visible and vertices))
 
     def set_levels(self, win):
         self.img_item.setLevels(win)
@@ -241,6 +276,7 @@ class PlaneWidget(QWidget):
             r = self._brush_r
             self.brush.setRect(h - r, v - r, 2 * r + 1, 2 * r + 1)
             self.owner.on_hover(self.plane, v, h)
+            self.owner.polygon_hover(self.plane, v, h)
 
 
 class OrthoView(QWidget):
@@ -356,6 +392,15 @@ class OrthoView(QWidget):
         else:
             self.planes[plane.name].redraw_overlay()
 
+    def set_polygon_preview(self, plane, vertices, hover=None):
+        for name, widget in self.planes.items():
+            widget.set_polygon(vertices if name == plane.name else (), hover if name == plane.name else None,
+                               name == plane.name)
+
+    def clear_polygon_preview(self):
+        for widget in self.planes.values():
+            widget.set_polygon((), None, False)
+
     # -- cursor / navigation --------------------------------------------
     def set_cursor(self, i, j, k):
         if self.image is None:
@@ -424,6 +469,9 @@ class OrthoView(QWidget):
     def tool_is_paint(self):
         return self.controller is not None and self.controller.tool == "brush"
 
+    def tool_is_polygon(self):
+        return self.controller is not None and self.controller.tool == "polygon"
+
     def tool_is_click(self):
         return self.controller is not None and self.controller.tool == "fill"
 
@@ -442,6 +490,14 @@ class OrthoView(QWidget):
     def paint_click(self, plane, v, h, right):
         if self.controller:
             self.controller.plane_paint_click(plane, v, h, right)
+
+    def polygon_click(self, plane, v, h, finish=False):
+        if self.controller:
+            self.controller.polygon_click(plane, v, h, finish)
+
+    def polygon_hover(self, plane, v, h):
+        if self.controller:
+            self.controller.polygon_hover(plane, v, h)
 
     def on_hover(self, plane, v, h):
         self.hovered.emit(*plane.disp_to_vox(v, h, self.cursor, self.image.shape))
