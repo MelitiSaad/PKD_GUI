@@ -98,6 +98,18 @@ def test_safe_erase_mask_only_targets_active_label():
                           np.array([False, True, False, True]))
 
 
+def test_segmentation_layers_keep_independent_editing_state():
+    from pkdqc.core.layers import SegmentationLayers
+    layers = SegmentationLayers()
+    organs = layers.add("Organs", make_seg(), make_active=True)
+    cysts = layers.add("Cysts", Segmentation(np.zeros((32, 32, 8), np.uint16)), locked=True)
+    assert layers.active is organs
+    assert layers.visible_layers() == (organs, cysts)
+    with pytest.raises(ValueError):
+        layers.set_active(1)
+    assert organs.history is not cysts.history
+
+
 def test_grow_and_shrink_3d():
     seg = make_seg()
     before = int((seg.data == 1).sum())

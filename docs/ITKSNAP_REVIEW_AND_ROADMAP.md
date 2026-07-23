@@ -242,3 +242,19 @@ the fastest manual correction tool for irregular kidney boundaries.
 * **Test at the core boundary.** Rasterization, connected-region rules,
   geometry, history, review metadata, and stale-result rejection are Qt-free
   tests; GUI tests cover discovery and state wiring.
+
+## Multi-segmentation architecture decision
+
+The application will represent segmentations as an ordered `SegmentationLayers`
+collection.  Each `SegmentationLayer` owns its label volume, visibility,
+opacity, lock state, and independent bounded undo history; exactly one unlocked
+layer may be active for editing.  This keeps an edit, autosave checkpoint, and
+undo stack unambiguous rather than attempting to merge unrelated label maps.
+
+The renderer will compose only visible layers in order, using each layer's LUT
+and opacity.  The active layer remains the fast editable overlay; additional
+layers are read-only render passes until selected.  Geometry validation occurs
+at each load against the immutable image affine and shape, using the existing
+loader validation.  The first implementation is deliberately core-first: the
+default single-layer UI remains unchanged while a compact, opt-in Layers panel
+can be wired without rewriting image, editing, or history code.
