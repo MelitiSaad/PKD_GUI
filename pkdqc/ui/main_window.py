@@ -58,7 +58,7 @@ TOOL_HINTS = {
     "pan": "Left-drag moves the image · right-drag zooms · wheel changes slice",
     "brush": "Left paints the active object · right erases · Alt+wheel or [ ] resizes",
     "fill": "Left fills the connected region · right clears it",
-    "lasso": "Drag to outline a region · release to preview · choose Add or Remove",
+    "lasso": "Left-drag adds the active object · right-drag removes it",
 }
 
 # one-shot operations (never in the tool rail)
@@ -85,8 +85,6 @@ _SHORTCUTS = {
     "brush_plus": ("Larger brush", "]"),
     "brush_threshold": ("Threshold brush", "T"),
     "brush_protect": ("Protect labels", ""),
-    "lasso_add": ("Add lasso selection", ""),
-    "lasso_remove": ("Remove lasso selection", ""),
     "reset_view": ("Reset zoom", "Ctrl+0"),
     "update_3d": ("Update 3D", "F5"),
     "contrast": ("Contrast\u2026", "C"),
@@ -120,7 +118,6 @@ class MainWindow(QMainWindow):
         self.session: Optional[Session] = None
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
-        self._tool_before_polygon = "crosshair"
         self._enable_3d = enable_3d and volume_view.available()
 
         self.act: dict[str, QAction] = {}
@@ -137,7 +134,6 @@ class MainWindow(QMainWindow):
         self.controller = ToolController(self.ortho, self)
         self.controller.brushRadiusChanged.connect(self._on_brush_changed)
         self.controller.edited.connect(self._on_edited)
-        self.controller.polygonFinished.connect(self._restore_after_polygon)
         self._connect()
         self._set_tool("crosshair")
 
@@ -183,7 +179,6 @@ class MainWindow(QMainWindow):
         self._mk("contrast", "threshold"); self._mk("remove_unused")
         self._mk("brush_threshold", checkable=True)
         self._mk("brush_protect", checkable=True); self.act["brush_protect"].setChecked(True)
-        self._mk("lasso_add"); self._mk("lasso_remove")
         self._mk("continuous_3d", checkable=True)
         self._mk("axes_3d", checkable=True); self.act["axes_3d"].setChecked(True)
 
@@ -236,9 +231,6 @@ class MainWindow(QMainWindow):
             m_seg.addAction(self.act[oid])
         m_seg.addSeparator()
         m_seg.addAction(self.act["remove_unused"])
-        m_advanced = m_seg.addMenu("Advanced correction")
-        m_advanced.addAction(self.act["polygon_add"])
-        m_advanced.addAction(self.act["polygon_remove"])
 
         m_tools = mb.addMenu("&Tools")
         for tid, _l, _i, _k in TOOLS:
@@ -305,14 +297,6 @@ class MainWindow(QMainWindow):
         self.btn_cleanup.setMenu(menu)
         top.addWidget(self.btn_cleanup)
         top.addAction(self.act["contrast"])
-        self.lasso_controls = QWidget()
-        ph = QHBoxLayout(self.lasso_controls); ph.setContentsMargins(8, 0, 0, 0); ph.setSpacing(3)
-        ph.addWidget(QLabel("Lasso"))
-        for aid in ("lasso_add", "lasso_remove"):
-            b = QToolButton(); b.setDefaultAction(self.act[aid]); b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            ph.addWidget(b)
-        self.lasso_controls.setVisible(False)
-        top.addWidget(self.lasso_controls)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, top)
 
     def _build_view_bar(self):
@@ -371,8 +355,6 @@ class MainWindow(QMainWindow):
         self.act["brush_plus"].triggered.connect(lambda: self._nudge_brush(+1))
         self.act["brush_threshold"].toggled.connect(self._on_threshold_toggled)
         self.act["brush_protect"].toggled.connect(self.controller.set_protect_existing)
-        self.act["lasso_add"].triggered.connect(lambda: self.controller.apply_lasso("add"))
-        self.act["lasso_remove"].triggered.connect(lambda: self.controller.apply_lasso("remove"))
         self.act["reset_view"].triggered.connect(self._reset_view)
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
@@ -413,7 +395,6 @@ class MainWindow(QMainWindow):
         self.brush_spin.setEnabled(is_brush)
         self.brush_mode.setEnabled(is_brush)
         self.act["brush_protect"].setEnabled(is_brush)
-        self.lasso_controls.setVisible(name == "lasso")
 
     @gui_guard
 

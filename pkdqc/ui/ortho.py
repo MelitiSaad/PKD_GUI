@@ -70,19 +70,20 @@ class _PlaneViewBox(pg.ViewBox):
         btn = ev.button()
         tool = o.tool_name()
 
-        # Middle-drag always pans, whatever the tool. Right-drag always zooms,
-        # except for painting tools where right means erase.
+        # Middle-drag always pans. Right-drag zooms except when the active editing
+        # tool uses it as its scoped erase gesture (Brush or Lasso).
         if btn == Qt.MouseButton.MiddleButton:
             super().mouseDragEvent(ev, axis)
             return
 
-        if o.tool_is_lasso() and btn == Qt.MouseButton.LeftButton:
+        if o.tool_is_lasso() and btn in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             ev.accept()
             v, h = self._vh(ev.scenePos())
+            right = btn == Qt.MouseButton.RightButton
             if ev.isStart():
                 o.lasso_start(self.w.plane, v, h)
             elif ev.isFinish():
-                o.lasso_end(self.w.plane, v, h)
+                o.lasso_end(self.w.plane, v, h, right)
             else:
                 o.lasso_move(self.w.plane, v, h)
             return
@@ -123,9 +124,7 @@ class _PlaneViewBox(pg.ViewBox):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             ev.accept()
             v, h = self._vh(ev.scenePos())
-            if o.tool_is_polygon():
-                o.polygon_click(self.w.plane, v, h, finish=right)
-            elif o.tool_is_paint() or o.tool_is_click():
+            if o.tool_is_paint() or o.tool_is_click():
                 o.paint_click(self.w.plane, v, h, right)
             elif not right:
                 o.navigate_click(self.w.plane, v, h)
@@ -133,12 +132,6 @@ class _PlaneViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
-        o = self.w.owner
-        if o.tool_is_polygon() and ev.button() == Qt.MouseButton.LeftButton:
-            v, h = self._vh(ev.scenePos())
-            o.polygon_click(self.w.plane, v, h, finish=True)
-            ev.accept()
-            return
         self.w.owner.toggle_maximize(self.w.plane.name)
         ev.accept()
 
@@ -210,6 +203,8 @@ class PlaneWidget(QWidget):
         self._overlay_timer = QTimer(self); self._overlay_timer.setSingleShot(True)
         self._overlay_timer.timeout.connect(self._flush_overlay)
         self._overlay_dirty = None
+        self._lasso_flash_timer = QTimer(self); self._lasso_flash_timer.setSingleShot(True)
+        self._lasso_flash_timer.timeout.connect(lambda: self.set_lasso((), None, False))
         self.glw.scene().sigMouseMoved.connect(self._hover)
 
     def refresh(self):
@@ -258,6 +253,14 @@ class PlaneWidget(QWidget):
         self.lasso.setPath(path)
         self.lasso.setVisible(bool(visible and vertices))
 
+    def stop_lasso_flash(self):
+        self._lasso_flash_timer.stop()
+
+    def flash_lasso(self, vertices):
+        """Leave the closed contour visible briefly after its edit is committed."""
+        self.set_lasso(vertices, visible=True)
+        self._lasso_flash_timer.start(160)
+
     def set_levels(self, win):
         self.img_item.setLevels(win)
 
@@ -293,7 +296,6 @@ class PlaneWidget(QWidget):
             rh = rv * vsp / hsp if hsp > 0 else rv
             self.brush.setRect(h - rh, v - rv, 2 * rh + 1, 2 * rv + 1)
             self.owner.on_hover(self.plane, v, h)
-            self.owner.polygon_hover(self.plane, v, h)
 
 
 class OrthoView(QWidget):
@@ -411,12 +413,17 @@ class OrthoView(QWidget):
 
     def set_lasso_preview(self, plane, vertices, hover=None):
         for name, widget in self.planes.items():
+            widget.stop_lasso_flash()
             widget.set_lasso(vertices if name == plane.name else (), hover if name == plane.name else None,
-                               name == plane.name)
+                             name == plane.name)
 
     def clear_lasso_preview(self):
         for widget in self.planes.values():
+            widget.stop_lasso_flash()
             widget.set_lasso((), None, False)
+
+    def flash_lasso(self, plane, vertices):
+        self.planes[plane.name].flash_lasso(vertices)
 
     # -- cursor / navigation --------------------------------------------
     def set_cursor(self, i, j, k):
@@ -516,9 +523,9 @@ class OrthoView(QWidget):
         if self.controller:
             self.controller.lasso_move(plane, v, h)
 
-    def lasso_end(self, plane, v, h):
+    def lasso_end(self, plane, v, h, right=False):
         if self.controller:
-            self.controller.lasso_end(plane, v, h)
+            self.controller.lasso_end(plane, v, h, right)
 
     def on_hover(self, plane, v, h):
         self.hovered.emit(*plane.disp_to_vox(v, h, self.cursor, self.image.shape))
