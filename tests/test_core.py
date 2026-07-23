@@ -384,3 +384,39 @@ def test_protected_paint_only_targets_background_or_same_label():
     assert np.array_equal(paintable_mask(labels, 1, True), [True, True, False, True])
     assert np.array_equal(paintable_mask(labels, 1, False), [True, True, True, True])
     assert np.array_equal(paintable_mask(labels, 0, True), [True, True, True, True])
+
+
+def test_main_window_references_only_registered_actions():
+    """Keep merge conflicts from leaving menu actions without an action object."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("pkdqc/ui/main_window.py").read_text(encoding="utf-8"))
+    actions = set()
+    referenced = set()
+
+    class ActionVisitor(ast.NodeVisitor):
+        def visit_Call(self, node):
+            if (isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_mk"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                actions.add(node.args[0].value)
+            self.generic_visit(node)
+
+        def visit_Subscript(self, node):
+            value = node.value
+            key = node.slice
+            if (isinstance(value, ast.Attribute) and value.attr == "act"
+                    and isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                referenced.add(key.value)
+            self.generic_visit(node)
+
+    ActionVisitor().visit(tree)
+    # These registries are constructed through loops in _make_actions.
+    actions.update({"crosshair", "pan", "brush", "fill", "lasso"})
+    actions.update({"grow", "shrink", "islands", "holes", "interpolate"})
+    actions.update({"layout_grid", "layout_axial", "layout_coronal", "layout_sagittal", "layout_3d"})
+
+    assert referenced <= actions
