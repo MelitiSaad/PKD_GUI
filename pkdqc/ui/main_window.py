@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         self.session: Optional[Session] = None
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
+        self._tool_before_polygon = "crosshair"
         self._enable_3d = enable_3d and volume_view.available()
 
         self.act: dict[str, QAction] = {}
@@ -136,6 +137,7 @@ class MainWindow(QMainWindow):
         self.controller = ToolController(self.ortho, self)
         self.controller.brushRadiusChanged.connect(self._on_brush_changed)
         self.controller.edited.connect(self._on_edited)
+        self.controller.polygonFinished.connect(self._restore_after_polygon)
         self._connect()
         self._set_tool("crosshair")
 
@@ -234,6 +236,9 @@ class MainWindow(QMainWindow):
             m_seg.addAction(self.act[oid])
         m_seg.addSeparator()
         m_seg.addAction(self.act["remove_unused"])
+        m_advanced = m_seg.addMenu("Advanced correction")
+        m_advanced.addAction(self.act["polygon_add"])
+        m_advanced.addAction(self.act["polygon_remove"])
 
         m_tools = mb.addMenu("&Tools")
         for tid, _l, _i, _k in TOOLS:

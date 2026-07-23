@@ -28,6 +28,7 @@ class ToolController(QObject):
     brushRadiusChanged = Signal(int)
     toolChanged = Signal(str)
     edited = Signal()
+    polygonFinished = Signal()
 
     def __init__(self, ortho, parent=None):
         super().__init__(parent)
