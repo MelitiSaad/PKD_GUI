@@ -123,7 +123,9 @@ class _PlaneViewBox(pg.ViewBox):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             ev.accept()
             v, h = self._vh(ev.scenePos())
-            if o.tool_is_paint() or o.tool_is_click():
+            if o.tool_is_polygon():
+                o.polygon_click(self.w.plane, v, h, finish=right)
+            elif o.tool_is_paint() or o.tool_is_click():
                 o.paint_click(self.w.plane, v, h, right)
             elif not right:
                 o.navigate_click(self.w.plane, v, h)
@@ -131,6 +133,12 @@ class _PlaneViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
+        o = self.w.owner
+        if o.tool_is_polygon() and ev.button() == Qt.MouseButton.LeftButton:
+            v, h = self._vh(ev.scenePos())
+            o.polygon_click(self.w.plane, v, h, finish=True)
+            ev.accept()
+            return
         self.w.owner.toggle_maximize(self.w.plane.name)
         ev.accept()
 
@@ -285,6 +293,7 @@ class PlaneWidget(QWidget):
             rh = rv * vsp / hsp if hsp > 0 else rv
             self.brush.setRect(h - rh, v - rv, 2 * rh + 1, 2 * rv + 1)
             self.owner.on_hover(self.plane, v, h)
+            self.owner.polygon_hover(self.plane, v, h)
 
 
 class OrthoView(QWidget):
