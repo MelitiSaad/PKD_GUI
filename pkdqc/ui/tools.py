@@ -28,6 +28,7 @@ class ToolController(QObject):
     brushRadiusChanged = Signal(int)
     toolChanged = Signal(str)
     edited = Signal()
+    polygonFinished = Signal()
 
     def __init__(self, ortho, parent=None):
         super().__init__(parent)
@@ -47,6 +48,9 @@ class ToolController(QObject):
         self._rec: Optional[StrokeRecorder] = None
         self._last_vh: Optional[Tuple[int, int]] = None
         self._paint_val: int = 0
+        self.polygon_mode = "add"
+        self._polygon_plane = None
+        self._polygon_vertices = []
         ortho.set_controller(self)
 
     # -- context ---------------------------------------------------------
@@ -57,10 +61,53 @@ class ToolController(QObject):
         self.threshold_band = image.default_window if image is not None else None
 
     def set_tool(self, name: str) -> None:
+        if self.tool == "polygon" and name != "polygon":
+            self.cancel_polygon()
         self.tool = name
         self.ortho.set_brush_visible(name in PAINT_TOOLS)
         self.ortho.set_brush_radius(self.brush_radius)
         self.toolChanged.emit(name)
+
+    def set_polygon_mode(self, mode: str) -> None:
+        self.polygon_mode = "remove" if mode == "remove" else "add"
+
+    def polygon_click(self, plane, v: int, h: int, finish: bool = False) -> None:
+        if self.seg is None or self.history is None:
+            return
+        if self._polygon_plane is not None and self._polygon_plane is not plane:
+            self.cancel_polygon()
+        self._polygon_plane = plane
+        point = (int(v), int(h))
+        if not self._polygon_vertices or self._polygon_vertices[-1] != point:
+            self._polygon_vertices.append(point)
+        if finish:
+            self.finish_polygon()
+        else:
+            self.ortho.set_polygon_preview(plane, self._polygon_vertices)
+
+    def polygon_hover(self, plane, v: int, h: int) -> None:
+        if self.tool == "polygon" and self._polygon_plane is plane and self._polygon_vertices:
+            self.ortho.set_polygon_preview(plane, self._polygon_vertices, (int(v), int(h)))
+
+    def cancel_polygon(self) -> None:
+        self._polygon_plane = None
+        self._polygon_vertices = []
+        self.ortho.clear_polygon_preview()
+
+    def finish_polygon(self) -> None:
+        plane, vertices = self._polygon_plane, self._polygon_vertices
+        self.cancel_polygon()
+        if plane is None or len(vertices) < 3:
+            return
+        value = 0 if self.polygon_mode == "remove" else int(self.seg.active_id)
+        cmd = segops.apply_polygon_plane(self.seg, plane, self.ortho.cursor, vertices, value,
+                                         protect_existing=self.protect_existing)
+        if cmd is not None:
+            self.history.push(cmd)
+            self.ortho.redraw_overlay()
+            self.ortho.notify_edit()
+            self.edited.emit()
+        self.polygonFinished.emit()
 
     def set_brush_mode(self, mode: str) -> None:
         if mode in BRUSH_MODES:

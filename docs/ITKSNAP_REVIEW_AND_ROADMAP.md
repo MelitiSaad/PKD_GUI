@@ -178,6 +178,41 @@ does not cause cross-plane overlays to lag after stroke completion.  A headless
 benchmark may validate core stamping; interactive frame measurements require a
 desktop OpenGL/Qt environment.
 
+### 2026-07-23 developer baseline and Stage-1 result
+
+`benchmarks/brush_interaction.py` exercises the same axial plane mapping,
+batched `StrokeRecorder` path, command construction, and NumPy/LUT overlay
+materialisation used by a live stroke.  It includes 512/1024-pixel slices,
+radii 4/16/40, paint/erase, and 12/96-event strokes.  The benchmark contrasts
+the previous full-overlay-per-event presentation with the coalesced
+event-loop-frame presentation.  On the 96-event paint stroke, p95 model frame
+time (ms) changed as follows:
+
+| Slice | Radius 4 | Radius 16 | Radius 40 |
+|---|---:|---:|---:|
+| 512² | 6.187 → 0.282 | 9.634 → 0.667 | 6.616 → 1.460 |
+| 1024² | 29.930 → 0.184 | 25.163 → 0.471 | 27.584 → 1.929 |
+
+The removed bottleneck is repeated full-slice NumPy/LUT materialisation and
+graphics update requests between Qt paint events.  The coalesced path only
+materialises/uploads the latest state once Qt can present it; the displayed
+segmentation, changed voxels, and one-command undo payload are unchanged.
+The environment used for these numbers lacks `libGL.so.1`, so Qt/QImage upload
+and interactive GPU frame timing remain a required desktop validation step.
+
+### Polygon first-release design
+
+Polygon is intentionally a 2D-per-current-plane tool.  It rasterises display
+coordinates and maps them through the existing axial/coronal/sagittal plane
+mapping before producing one `EditCommand`; it therefore changes the same voxel
+grid without changing affine or physical geometry.  It is entered through
+**Segmentation → Advanced correction → Polygon Add/Remove** (`P` / `Shift+P`),
+shows its small Add/Remove controls only while active, completes on double-click
+or right-click, and then restores the preceding tool.  Add obeys Protect Labels;
+Remove follows the established brush erase rule.  This avoids a permanent lasso
+tool-rail button and keeps a large correction to one undo/autosave/edit-tracking
+operation.
+
 ## Modern workflow design rules
 
 * **One visible primary task at a time.** The default rail stays Crosshair, Pan,

@@ -36,6 +36,62 @@ def paintable_mask(current_values: np.ndarray, value: int, protect_existing: boo
     return (values == 0) | (values == np.uint16(value))
 
 
+# ------------------------------------------------------------ polygon / lasso
+def rasterize_polygon(shape: tuple[int, int], vertices) -> np.ndarray:
+    """Return a pixel-centre mask for a closed polygon in display coordinates.
+
+    ``vertices`` are ``(vertical, horizontal)`` points, matching the plane-view
+    convention.  The compact ray-casting implementation deliberately has no UI
+    dependency, which makes its medical-image behaviour regression-testable.
+    Boundary pixels are included by the scanline rule used for the fill.
+    """
+    pts = np.asarray(vertices, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] != 2:
+        return np.zeros(shape, dtype=bool)
+    rows, cols = int(shape[0]), int(shape[1])
+    lo_v = max(0, int(np.floor(pts[:, 0].min())))
+    hi_v = min(rows, int(np.ceil(pts[:, 0].max())) + 1)
+    lo_h = max(0, int(np.floor(pts[:, 1].min())))
+    hi_h = min(cols, int(np.ceil(pts[:, 1].max())) + 1)
+    out = np.zeros((rows, cols), dtype=bool)
+    if lo_v >= hi_v or lo_h >= hi_h:
+        return out
+    vv, hh = np.mgrid[lo_v:hi_v, lo_h:hi_h]
+    y, x = vv + 0.5, hh + 0.5
+    inside = np.zeros(y.shape, dtype=bool)
+    pv, ph = pts[-1]
+    for cv, ch in pts:
+        crosses = ((cv > y) != (pv > y))
+        x_at_y = (ph - ch) * (y - cv) / ((pv - cv) if pv != cv else 1e-20) + ch
+        inside ^= crosses & (x < x_at_y)
+        pv, ph = cv, ch
+    out[lo_v:hi_v, lo_h:hi_h] = inside
+    return out
+
+
+def apply_polygon_plane(seg: Segmentation, plane, cursor, vertices, value: int,
+                        protect_existing: bool = True) -> Optional[EditCommand]:
+    """Apply one polygon add/remove operation to one MPR plane as one command.
+
+    The current plane is rasterised then mapped through ``plane`` rather than
+    assuming axial storage.  Therefore coronal and sagittal corrections modify
+    the same physical voxels without altering image geometry or affine data.
+    """
+    current = plane.slice2d(seg.data, cursor)
+    mask = rasterize_polygon(current.shape, vertices)
+    if not mask.any():
+        return None
+    updated = current.copy()
+    if value == 0:
+        updated[mask] = 0
+        description = "polygon remove"
+    else:
+        writable = mask & paintable_mask(current, value, protect_existing)
+        updated[writable] = np.uint16(value)
+        description = "polygon add"
+    return commands.apply_plane_slice(seg, plane, cursor, updated, description)
+
+
 # --------------------------------------------------------------------- fill
 def flood_fill(seg: Segmentation, z: int, row: int, col: int, value: int,
                connectivity: int = 1) -> Optional[EditCommand]:

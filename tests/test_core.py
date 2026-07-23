@@ -252,6 +252,54 @@ def test_flood_fill_plane():
     assert int((seg.data == 3).sum()) == 0
 
 
+# --------------------------------------------------------------- polygon / lasso
+def test_polygon_rasterization_and_plane_add_remove_undo():
+    from pkdqc.core.planes import PLANES, AXIAL
+    from pkdqc.core import segops
+    seg = Segmentation(np.zeros((16, 16, 5), dtype=np.uint16))
+    plane = PLANES[AXIAL]
+    cursor = [8, 8, 2]
+    vertices = [(3, 3), (3, 11), (11, 11), (11, 3)]
+    mask = segops.rasterize_polygon((16, 16), vertices)
+    assert mask.shape == (16, 16)
+    assert mask[5, 5] and not mask[1, 1]
+
+    hist = History(seg)
+    add = segops.apply_polygon_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
+    assert add is not None
+    hist.push(add)
+    added = int((seg.data[:, :, 2] == 2).sum())
+    assert added == int(mask.sum())
+    assert seg.revision == 1 and 2 in seg.edited_slices
+    hist.undo()
+    assert int((seg.data == 2).sum()) == 0
+    hist.redo()
+    assert int((seg.data == 2).sum()) == added
+
+    remove = segops.apply_polygon_plane(seg, plane, cursor, vertices, 0)
+    assert remove is not None
+    hist.push(remove)
+    assert int((seg.data == 2).sum()) == 0
+    hist.undo()
+    assert int((seg.data == 2).sum()) == added
+
+
+def test_polygon_protect_labels_and_coronal_geometry():
+    from pkdqc.core.planes import PLANES, CORONAL
+    from pkdqc.core import segops
+    seg = Segmentation(np.zeros((12, 12, 12), dtype=np.uint16))
+    # The polygon occupies display rows Z=3..8 and columns X=3..8 at Y=6.
+    seg.data[5, 6, 5] = 9
+    plane = PLANES[CORONAL]
+    cursor = [6, 6, 6]
+    vertices = [(3, 3), (3, 9), (9, 9), (9, 3)]
+    cmd = segops.apply_polygon_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
+    assert cmd is not None
+    assert seg.data[5, 6, 5] == 9  # never overwrite a protected label
+    assert seg.data[4, 6, 4] == 2  # plane mapping writes X,Y,Z, not axial-only
+    assert np.count_nonzero(seg.data[:, 6, :] == 2) > 0
+
+
 # --------------------------------------------------------------- display aspect
 def test_display_aspect_isotropic_is_one():
     from pkdqc.core.planes import display_aspect
