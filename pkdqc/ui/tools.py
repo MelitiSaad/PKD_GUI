@@ -81,12 +81,13 @@ class ToolController(QObject):
             self._lasso_vertices.append(point)
             self.ortho.set_lasso_preview(plane, self._lasso_vertices)
 
-    def lasso_end(self, plane, v: int, h: int) -> None:
+    def lasso_end(self, plane, v: int, h: int, right: bool = False) -> None:
+        """Commit the freehand contour immediately as one undoable edit."""
         self.lasso_move(plane, v, h)
-        # Leave the closed contour visible as a deliberate preview; Add/Remove
-        # is the only operation that mutates the segmentation.
         if len(self._lasso_vertices) < 3:
             self.cancel_lasso()
+            return
+        self.apply_lasso("remove" if right else "add")
 
     def cancel_lasso(self) -> None:
         self._lasso_plane = None
@@ -107,6 +108,7 @@ class ToolController(QObject):
         if cmd is not None:
             self.history.push(cmd)
             self.ortho.redraw_overlay()
+            self.ortho.flash_lasso(plane, vertices)
             self.ortho.notify_edit()
             self.edited.emit()
 

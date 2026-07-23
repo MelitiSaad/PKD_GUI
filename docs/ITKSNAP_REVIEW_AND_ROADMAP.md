@@ -110,8 +110,9 @@ than expanding the always-visible tool rail.
 
 ### Features worth adapting
 
-1. **Polygon/lasso correction:** a transient canvas gesture that rasterizes to
-   the current plane, with Add/Remove controls and one undo command.
+1. **Lasso correction:** a transient canvas gesture that rasterizes to the
+   current plane immediately on release, with left-drag Add/right-drag Remove
+   and one undo command.
 2. **Connected threshold:** a seed-based 2D/3D intensity-connected region with
    conservative tolerance defaults and preview-before-apply.
 3. **Focused label guards:** lock, isolate, hide other labels, paint-inside, and
@@ -151,7 +152,7 @@ include focused regression tests.
 |---|---|---|---|---|
 | 0 | **Establish reproducible brush benchmarks and dirty-region instrumentation.** This identifies whether NumPy stamping, LUT conversion, or Qt upload is the remaining bottleneck before changing rendering. | Developer-only benchmark command and optional debug timing; no end-user control. | Medium | Critical foundation |
 | 1 | **Partial overlay updates for brush strokes.** Update only the receiving plane's changed rectangle, avoid full `setImage`/LUT conversion where the graphics backend permits it, and coalesce repaint requests to one event-loop frame. | Invisible behavior change.  Keep the existing brush controls. | High | Very high |
-| 2 | **Polygon/lasso.** Fast large boundary repair reduces hundreds of brush dabs to one action. | Segmentation → Correct with polygon; shortcut; a small contextual Add/Remove chooser appears only while active. | Medium | Very high |
+| 2 | **Lasso.** Fast large boundary repair reduces hundreds of brush dabs to one action. | Primary tool rail; left drag adds and right drag removes immediately on release. | Medium | Very high |
 | 3 | **Connected threshold / intelligent fill.** A seeded, tolerance-bounded correction fixes undersegmented kidney regions quickly. | Segmentation → Intelligent fill opens a compact popover.  One-click default uses the active label; advanced tolerance/connectivity/3D options stay collapsed. | Medium–High | High |
 | 4 | **Label safety policies.** Lock and isolate prevent accidental cross-label edits; paint-inside/outside makes corrections constrained and repeatable. | A compact protection popover near the active-label control shows the active policy; locks are visible in the label list. | Medium | High |
 | 5 | **Review state, bookmarks, and annotations.** Enables triage across hundreds of studies and gives difficult slices a durable audit trail. | A thin slice-state marker and review menu; annotation list remains in an expandable Review dock. | Medium | High |
@@ -207,10 +208,11 @@ coordinates and maps them through the existing axial/coronal/sagittal plane
 mapping before producing one `EditCommand`; it therefore changes the same voxel
 grid without changing affine or physical geometry.  It is entered through
 the **Lasso** tool (`L`) in the primary rail.  The reviewer drags a freehand
-contour, releases to preview its closed selection, then chooses the small
-contextual Add/Remove control.  Add obeys Protect Labels; Remove follows the
-established brush erase rule.  Lasso remains active for rapid repeated kidney
-boundary corrections while the contour itself is cleared after each operation.
+contour, and releases to apply its closed selection immediately. Left drag adds
+and right drag removes. Add obeys Protect Labels; Remove follows the established
+brush erase rule and affects only the active label. Each contour is one undoable
+operation; its closed outline briefly remains visible after the overlay updates.
+Lasso remains active for rapid repeated kidney boundary corrections.
 
 ## Cleanup-tool audit (kidney AI-QC)
 
