@@ -82,6 +82,7 @@ _SHORTCUTS = {
     "brush_minus": ("Smaller brush", "["),
     "brush_plus": ("Larger brush", "]"),
     "brush_threshold": ("Threshold brush", "T"),
+    "brush_protect": ("Protect labels", ""),
     "reset_view": ("Reset zoom", "Ctrl+0"),
     "update_3d": ("Update 3D", "F5"),
     "contrast": ("Contrast\u2026", "C"),
@@ -175,6 +176,7 @@ class MainWindow(QMainWindow):
         self._mk("reset_view", "reset_view"); self._mk("update_3d", "cube")
         self._mk("contrast", "threshold"); self._mk("remove_unused")
         self._mk("brush_threshold", checkable=True)
+        self._mk("brush_protect", checkable=True); self.act["brush_protect"].setChecked(True)
         self._mk("continuous_3d", checkable=True)
         self._mk("axes_3d", checkable=True); self.act["axes_3d"].setChecked(True)
 
@@ -233,6 +235,7 @@ class MainWindow(QMainWindow):
             m_tools.addAction(self.act[tid])
         m_tools.addSeparator()
         m_tools.addAction(self.act["brush_threshold"])
+        m_tools.addAction(self.act["brush_protect"])
         m_tools.addAction(self.act["brush_minus"]); m_tools.addAction(self.act["brush_plus"])
         m_tools.addSeparator()
         m_tools.addAction(self.act["contrast"])
@@ -273,6 +276,7 @@ class MainWindow(QMainWindow):
         self.brush_mode.addItems(["Normal", "Threshold"])
         self.brush_mode.setToolTip("Threshold restricts painting to the contrast window (T)")
         top.addWidget(self.brush_mode)
+        top.addAction(self.act["brush_protect"])
         self.brush_spin = QSpinBox()
         self.brush_spin.setRange(config.MIN_BRUSH_RADIUS, config.MAX_BRUSH_RADIUS)
         self.brush_spin.setValue(config.DEFAULT_BRUSH_RADIUS)
@@ -348,6 +352,7 @@ class MainWindow(QMainWindow):
         self.act["brush_minus"].triggered.connect(lambda: self._nudge_brush(-1))
         self.act["brush_plus"].triggered.connect(lambda: self._nudge_brush(+1))
         self.act["brush_threshold"].toggled.connect(self._on_threshold_toggled)
+        self.act["brush_protect"].toggled.connect(self.controller.set_protect_existing)
         self.act["reset_view"].triggered.connect(self._reset_view)
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
@@ -387,6 +392,7 @@ class MainWindow(QMainWindow):
         is_brush = name == "brush"
         self.brush_spin.setEnabled(is_brush)
         self.brush_mode.setEnabled(is_brush)
+        self.act["brush_protect"].setEnabled(is_brush)
 
     def _on_brush_mode(self, text):
         self.controller.set_brush_mode("threshold" if text == "Threshold" else "normal")
@@ -520,7 +526,7 @@ class MainWindow(QMainWindow):
         path = self._pick_open("Load segmentation", "Segmentations (*.nii *.nii.gz);;All files (*)")
         if not path:
             return
-        seg = io.load_segmentation(path, self.image.shape)
+        seg = io.load_segmentation(path, self.image.shape, self.image.affine)
         self._set_case(self.image, seg, path)
         self.statusBar().showMessage(f"Overlaid {os.path.basename(path)}", 4000)
 
@@ -647,7 +653,7 @@ class MainWindow(QMainWindow):
         has_img = self.image is not None
         for aid in list(_LAYOUT_OF) + [t[0] for t in TOOLS] + [o[0] for o in OPERATIONS] + [
                 "save", "new_seg", "next_edited", "prev_edited", "reset_view", "contrast",
-                "remove_unused", "update_3d", "load_seg", "brush_threshold"]:
+                "remove_unused", "update_3d", "load_seg", "brush_threshold", "brush_protect"]:
             self.act[aid].setEnabled(has_img)
         self.btn_cleanup.setEnabled(has_img)
         self.brush_spin.setEnabled(has_img and self.controller.tool == "brush"
@@ -690,7 +696,7 @@ class MainWindow(QMainWindow):
             image = io.load_image(path)
             self._set_case(image, Segmentation.empty_like(image.shape), None)
         elif clicked is seg_btn:
-            seg = io.load_segmentation(path, self.image.shape)
+            seg = io.load_segmentation(path, self.image.shape, self.image.affine)
             self._set_case(self.image, seg, path)
 
     # -- window state ----------------------------------------------------

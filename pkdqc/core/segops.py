@@ -7,6 +7,7 @@ the GUI.
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Optional
 
 import numpy as np
@@ -20,6 +21,19 @@ from .segmentation import Segmentation
 def _label_mask(seg: Segmentation, label_id: int, z: Optional[int]) -> np.ndarray:
     src = seg.data[:, :, z] if z is not None else seg.data
     return src == np.uint16(label_id)
+
+
+def paintable_mask(current_values: np.ndarray, value: int, protect_existing: bool) -> np.ndarray:
+    """Return voxels a brush may modify under the selected paint policy.
+
+    Protected painting adds only to background (and permits repainting the active
+    label), while erasing deliberately remains unrestricted.  Keeping the rule
+    in the Qt-free core makes it easy to reuse for future lasso/threshold tools.
+    """
+    if not protect_existing or value == 0:
+        return np.ones(np.asarray(current_values).shape, dtype=bool)
+    values = np.asarray(current_values)
+    return (values == 0) | (values == np.uint16(value))
 
 
 # --------------------------------------------------------------------- fill
@@ -185,8 +199,14 @@ def interpolate_between(seg: Segmentation, label_id: int, z0: int, z1: int) -> O
 
 
 # ------------------------------------------------------------ brush geometry
+@lru_cache(maxsize=128)
 def disk_offsets(radius: int) -> tuple[np.ndarray, np.ndarray]:
-    """Return (drow, dcol) integer offsets covering a filled disk of ``radius``."""
+    """Return cached integer offsets covering a filled disk of ``radius``.
+
+    Brush dabs are generated for every pointer event.  Caching avoids allocating
+    the same stencil repeatedly while a reviewer paints with one brush size.
+    Callers must treat the returned arrays as read-only.
+    """
     r = int(max(0, radius))
     yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
     inside = (yy * yy + xx * xx) <= (r + 0.5) ** 2

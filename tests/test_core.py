@@ -279,3 +279,24 @@ def test_display_aspect_rejects_bad_spacing():
     from pkdqc.core.planes import display_aspect
     for bad in [(0.0, 1.0), (1.0, 0.0), (float("nan"), 1.0), (float("inf"), 1.0)]:
         assert display_aspect(*bad) == 1.0
+
+
+def test_segmentation_affine_mismatch_raises(tmp_path):
+    nib = pytest.importorskip("nibabel")
+    from pkdqc.core import io
+    image_path = tmp_path / "img.nii.gz"
+    seg_path = tmp_path / "seg.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((10, 10, 3), np.float32), np.eye(4)), image_path)
+    shifted = np.eye(4); shifted[0, 3] = 5.0
+    nib.save(nib.Nifti1Image(np.zeros((10, 10, 3), np.uint16), shifted), seg_path)
+    image = io.load_image(str(image_path))
+    with pytest.raises(io.LoadError, match="affine"):
+        io.load_segmentation(str(seg_path), image.shape, image.affine)
+
+
+def test_protected_paint_only_targets_background_or_same_label():
+    from pkdqc.core.segops import paintable_mask
+    labels = np.array([0, 1, 2, 1], dtype=np.uint16)
+    assert np.array_equal(paintable_mask(labels, 1, True), [True, True, False, True])
+    assert np.array_equal(paintable_mask(labels, 1, False), [True, True, True, True])
+    assert np.array_equal(paintable_mask(labels, 0, True), [True, True, True, True])
