@@ -149,6 +149,14 @@ tests/         core unit tests (pytest)
 make_preview.py  headless integration run that renders preview PNGs
 ```
 
+## Product roadmap
+
+The source-level ITK-SNAP review and staged implementation roadmap are recorded
+in [`docs/ITKSNAP_REVIEW_AND_ROADMAP.md`](docs/ITKSNAP_REVIEW_AND_ROADMAP.md).
+It documents which ideas are appropriate for a focused kidney AI-segmentation QC
+workflow and which general-purpose workstation features are intentionally out of
+scope.
+
 ## Tests
 
 ```bash

@@ -18,6 +18,7 @@ _SVG = {
     "navigate": '<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
     "crosshair": '<path d="M12 2v6M12 16v6M2 12h6M16 12h6"/><circle cx="12" cy="12" r="3.4"/>',
     "brush": '<path d="M14.5 6.5l3 3"/><path d="M16 5l3 3-8.5 8.5-3-3z"/><path d="M7.5 13.5C5 15 5 18 3.5 20.5 6 20 9 20 10.5 17.5"/>',
+    "lasso": '<path d="M6 5c5-4 13 0 11 6-1 4-8 5-10 2-2-3 2-5 5-3 3 2 1 6-2 8"/><path d="M10 18l-2 3"/>',
     "eraser": '<path d="M8 20h11"/><path d="M14 6l4 4-7 7H8l-3-3z"/>',
     "fill": '<path d="M11 4l7 7-6 6a2 2 0 0 1-3 0l-4-4a2 2 0 0 1 0-3z"/><path d="M11 4L9 2"/><path d="M19 15c1 1 2 2 2 3a2 2 0 0 1-4 0c0-1 1-2 2-3z" fill="{c}"/>',
     "grow": '<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/><path d="M12 8v8M8 12h8"/>',

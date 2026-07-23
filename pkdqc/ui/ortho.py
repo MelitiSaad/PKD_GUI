@@ -25,9 +25,9 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph import functions as fn
 from PySide6.QtCore import QRectF, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtGui import QColor, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QGraphicsEllipseItem, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QGraphicsEllipseItem, QGraphicsPathItem, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from .. import theme
@@ -74,6 +74,17 @@ class _PlaneViewBox(pg.ViewBox):
         # except for painting tools where right means erase.
         if btn == Qt.MouseButton.MiddleButton:
             super().mouseDragEvent(ev, axis)
+            return
+
+        if o.tool_is_lasso() and btn == Qt.MouseButton.LeftButton:
+            ev.accept()
+            v, h = self._vh(ev.scenePos())
+            if ev.isStart():
+                o.lasso_start(self.w.plane, v, h)
+            elif ev.isFinish():
+                o.lasso_end(self.w.plane, v, h)
+            else:
+                o.lasso_move(self.w.plane, v, h)
             return
 
         if o.tool_is_paint() and btn in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
@@ -183,7 +194,14 @@ class PlaneWidget(QWidget):
         self.brush.setBrush(Qt.BrushStyle.NoBrush); self.brush.setZValue(20)
         self.brush.setVisible(False)
         self.vb.addItem(self.brush)
+        self.lasso = QGraphicsPathItem(); self.lasso.setZValue(21)
+        ppen = QPen(QColor(theme.ACCENT)); ppen.setCosmetic(True); ppen.setWidthF(1.8)
+        self.lasso.setPen(ppen); self.lasso.setVisible(False)
+        self.vb.addItem(self.lasso)
         self._brush_r = 4
+        self._overlay_timer = QTimer(self); self._overlay_timer.setSingleShot(True)
+        self._overlay_timer.timeout.connect(self._flush_overlay)
+        self._overlay_dirty = None
         self.glw.scene().sigMouseMoved.connect(self._hover)
 
     def refresh(self):
@@ -208,7 +226,29 @@ class PlaneWidget(QWidget):
                                autoLevels=False, levels=(0, max_id), lut=lut)
 
     def redraw_overlay(self):
+        """Coalesce pointer-rate overlay uploads into one event-loop frame.
+
+        A live brush can emit many stamps before Qt paints.  Keeping only one
+        queued upload avoids repeatedly converting/uploading the same slice,
+        while the mutable segmentation array remains the source of truth.
+        """
+        if not self._overlay_timer.isActive():
+            self._overlay_timer.start(0)
+
+    def _flush_overlay(self):
         self._refresh_overlay()
+
+    def set_lasso(self, vertices, hover=None, visible=False):
+        path = QPainterPath()
+        if vertices:
+            v, h = vertices[0]; path.moveTo(h + .5, v + .5)
+            for v, h in vertices[1:]: path.lineTo(h + .5, v + .5)
+            if hover is not None:
+                v, h = hover; path.lineTo(h + .5, v + .5)
+            else:
+                path.closeSubpath()
+        self.lasso.setPath(path)
+        self.lasso.setVisible(bool(visible and vertices))
 
     def set_levels(self, win):
         self.img_item.setLevels(win)
@@ -238,8 +278,12 @@ class PlaneWidget(QWidget):
         v, h = int(np.floor(p.y())), int(np.floor(p.x()))
         V = self.plane.vertical_len(img.shape); H = self.plane.horizontal_len(img.shape)
         if 0 <= v < V and 0 <= h < H:
-            r = self._brush_r
-            self.brush.setRect(h - r, v - r, 2 * r + 1, 2 * r + 1)
+            # Keep the cursor circular on anisotropic CT planes.  Stamping
+            # remains voxel-based; this is a physical-space preview only.
+            vsp, hsp = self.plane.spacing_vh(img.spacing)
+            rv = self._brush_r
+            rh = rv * vsp / hsp if hsp > 0 else rv
+            self.brush.setRect(h - rh, v - rv, 2 * rh + 1, 2 * rv + 1)
             self.owner.on_hover(self.plane, v, h)
 
 
@@ -356,6 +400,15 @@ class OrthoView(QWidget):
         else:
             self.planes[plane.name].redraw_overlay()
 
+    def set_lasso_preview(self, plane, vertices, hover=None):
+        for name, widget in self.planes.items():
+            widget.set_lasso(vertices if name == plane.name else (), hover if name == plane.name else None,
+                               name == plane.name)
+
+    def clear_lasso_preview(self):
+        for widget in self.planes.values():
+            widget.set_lasso((), None, False)
+
     # -- cursor / navigation --------------------------------------------
     def set_cursor(self, i, j, k):
         if self.image is None:
@@ -424,6 +477,9 @@ class OrthoView(QWidget):
     def tool_is_paint(self):
         return self.controller is not None and self.controller.tool == "brush"
 
+    def tool_is_lasso(self):
+        return self.controller is not None and self.controller.tool == "lasso"
+
     def tool_is_click(self):
         return self.controller is not None and self.controller.tool == "fill"
 
@@ -442,6 +498,18 @@ class OrthoView(QWidget):
     def paint_click(self, plane, v, h, right):
         if self.controller:
             self.controller.plane_paint_click(plane, v, h, right)
+
+    def lasso_start(self, plane, v, h):
+        if self.controller:
+            self.controller.lasso_start(plane, v, h)
+
+    def lasso_move(self, plane, v, h):
+        if self.controller:
+            self.controller.lasso_move(plane, v, h)
+
+    def lasso_end(self, plane, v, h):
+        if self.controller:
+            self.controller.lasso_end(plane, v, h)
 
     def on_hover(self, plane, v, h):
         self.hovered.emit(*plane.disp_to_vox(v, h, self.cursor, self.image.shape))

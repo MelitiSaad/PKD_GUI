@@ -47,6 +47,8 @@ class ToolController(QObject):
         self._rec: Optional[StrokeRecorder] = None
         self._last_vh: Optional[Tuple[int, int]] = None
         self._paint_val: int = 0
+        self._lasso_plane = None
+        self._lasso_vertices = []
         ortho.set_controller(self)
 
     # -- context ---------------------------------------------------------
@@ -57,10 +59,56 @@ class ToolController(QObject):
         self.threshold_band = image.default_window if image is not None else None
 
     def set_tool(self, name: str) -> None:
+        if self.tool == "lasso" and name != "lasso":
+            self.cancel_lasso()
         self.tool = name
         self.ortho.set_brush_visible(name in PAINT_TOOLS)
         self.ortho.set_brush_radius(self.brush_radius)
         self.toolChanged.emit(name)
+
+    def lasso_start(self, plane, v: int, h: int) -> None:
+        if self.seg is None or self.history is None:
+            return
+        self._lasso_plane = plane
+        self._lasso_vertices = [(int(v), int(h))]
+        self.ortho.set_lasso_preview(plane, self._lasso_vertices)
+
+    def lasso_move(self, plane, v: int, h: int) -> None:
+        if self._lasso_plane is not plane:
+            return
+        point = (int(v), int(h))
+        if point != self._lasso_vertices[-1]:
+            self._lasso_vertices.append(point)
+            self.ortho.set_lasso_preview(plane, self._lasso_vertices)
+
+    def lasso_end(self, plane, v: int, h: int) -> None:
+        self.lasso_move(plane, v, h)
+        # Leave the closed contour visible as a deliberate preview; Add/Remove
+        # is the only operation that mutates the segmentation.
+        if len(self._lasso_vertices) < 3:
+            self.cancel_lasso()
+
+    def cancel_lasso(self) -> None:
+        self._lasso_plane = None
+        self._lasso_vertices = []
+        self.ortho.clear_lasso_preview()
+
+    def apply_lasso(self, mode: str) -> None:
+        plane, vertices = self._lasso_plane, self._lasso_vertices
+        if plane is None or len(vertices) < 3:
+            return
+        value = 0 if mode == "remove" else int(self.seg.active_id)
+        cmd = segops.apply_lasso_plane(
+            self.seg, plane, self.ortho.cursor, vertices, value,
+            protect_existing=self.protect_existing,
+            remove_label=int(self.seg.active_id) if mode == "remove" else None,
+        )
+        self.cancel_lasso()
+        if cmd is not None:
+            self.history.push(cmd)
+            self.ortho.redraw_overlay()
+            self.ortho.notify_edit()
+            self.edited.emit()
 
     def set_brush_mode(self, mode: str) -> None:
         if mode in BRUSH_MODES:
@@ -108,6 +156,11 @@ class ToolController(QObject):
             ii, jj, kk = ii[keep], jj[keep], kk[keep]
         if ii.size and value != 0 and self.protect_existing:
             keep = segops.paintable_mask(self.seg.data[ii, jj, kk], value, True)
+            ii, jj, kk = ii[keep], jj[keep], kk[keep]
+        elif ii.size and value == 0:
+            # Safe default: erasing is scoped to the selected object.  A
+            # future explicit expert "erase all labels" policy may opt out.
+            keep = segops.paintable_mask(self.seg.data[ii, jj, kk], 0, True, self.seg.active_id)
             ii, jj, kk = ii[keep], jj[keep], kk[keep]
         self._rec.stamp_voxels(ii, jj, kk, value)
 
