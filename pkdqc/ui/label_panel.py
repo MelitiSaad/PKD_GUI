@@ -56,6 +56,10 @@ class LabelPanel(QWidget):
         root.setSpacing(10)
 
         root.addWidget(_title("OBJECTS"))
+        self.active_summary = QLabel("No active object")
+        self.active_summary.setProperty("role", "activeObject")
+        self.active_summary.setWordWrap(True)
+        root.addWidget(self.active_summary)
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setMaximumHeight(190)
@@ -139,6 +143,18 @@ class LabelPanel(QWidget):
                 if lab.id == self.seg.active_id:
                     self.list.setCurrentItem(item)
         self._suppress = False
+        self._update_active_summary()
+
+    def _update_active_summary(self) -> None:
+        if self.seg is None:
+            self.active_summary.setText("Open an image to begin.")
+            return
+        lab = self.seg.labels.labels.get(self.seg.active_id)
+        if lab is None:
+            self.active_summary.setText("No active object")
+            return
+        state = "visible" if lab.visible else "hidden"
+        self.active_summary.setText(f"Active object  ·  {lab.name}  (#{lab.id}, {state})")
 
     def select_label(self, lid: int) -> None:
         """Make ``lid`` the active object (e.g. after clicking a cyst)."""
@@ -151,6 +167,21 @@ class LabelPanel(QWidget):
     def label_name(self, lid: int) -> str:
         lab = self.seg.labels.labels.get(lid) if self.seg else None
         return lab.name if lab else f"label {lid}"
+
+    def selection_summary(self, lid: int) -> str:
+        """Concise transient details for a label selected in a slice viewer."""
+        if self.seg is None:
+            return "No segmentation loaded"
+        volume = next((v for v in self._volumes if v.id == lid), None)
+        if volume is None:
+            volume = next((v for v in compute_volumes(self.seg, self.image) if v.id == lid), None)
+        if volume is None:
+            return self.label_name(lid)
+        lines = [self.label_name(lid), f"Label ID: {lid}",
+                 f"Volume: {volume.ml:,.2f} mL", f"Voxels: {volume.voxels:,}"]
+        if volume.mean_intensity is not None:
+            lines.append(f"Mean intensity: {volume.mean_intensity:,.1f}")
+        return "\n".join(lines)
 
     def remove_unused_labels(self) -> int:
         """Drop object definitions that don't appear anywhere in the volume."""
@@ -182,6 +213,7 @@ class LabelPanel(QWidget):
             return
         lid = int(cur.data(Qt.ItemDataRole.UserRole))
         self.seg.active_id = lid
+        self._update_active_summary()
         self.activeLabelChanged.emit(lid)
 
     def _on_item_changed(self, item) -> None:

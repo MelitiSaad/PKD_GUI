@@ -21,10 +21,10 @@ from typing import Optional
 
 import numpy as np
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
-    QMenu, QMessageBox, QSlider, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
+    QMenu, QMessageBox, QSlider, QSpinBox, QToolBar, QToolButton, QToolTip, QVBoxLayout,
     QWidget,
 )
 
@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
         for aid in ("load_seg", "save", "new_seg"):
             m_seg.addAction(self.act[aid])
         m_seg.addSeparator()
+        m_cleanup = m_seg.addMenu("Clean up")
         for oid, _l, _i, _k in OPERATIONS:
             m_seg.addAction(self.act[oid])
         m_seg.addSeparator()
@@ -287,7 +288,7 @@ class MainWindow(QMainWindow):
         top.addSeparator()
 
         self.btn_cleanup = QToolButton()
-        self.btn_cleanup.setText("Clean up")
+        self.btn_cleanup.setText("Cleanup")
         self.btn_cleanup.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_cleanup.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.btn_cleanup)
@@ -373,7 +374,7 @@ class MainWindow(QMainWindow):
         self.slice_slider.valueChanged.connect(self.ortho.set_axial_slice)
         self.brush_spin.valueChanged.connect(self._on_spin_brush)
         self.brush_mode.currentTextChanged.connect(self._on_brush_mode)
-        self.panel.activeLabelChanged.connect(lambda _id: self.ortho.redraw_overlay())
+        self.panel.activeLabelChanged.connect(self._on_active_label_changed)
         self.panel.overlayChanged.connect(self._on_overlay_changed)
         self.panel.deleteLabelRequested.connect(self._delete_label)
 
@@ -389,8 +390,7 @@ class MainWindow(QMainWindow):
     def _set_tool(self, name):
         self.controller.set_tool(name)
         self.act[name].setChecked(True)
-        self.lbl_tool.setText(f"  {_SHORTCUTS[name][0]}")
-        self.lbl_hint.setText("   " + TOOL_HINTS.get(name, ""))
+        self._update_tool_feedback(name)
         is_brush = name == "brush"
         self.brush_spin.setEnabled(is_brush)
         self.brush_mode.setEnabled(is_brush)
@@ -469,7 +469,14 @@ class MainWindow(QMainWindow):
     @gui_guard
     def _on_label_picked(self, lid):
         self.panel.select_label(lid)
-        self.statusBar().showMessage(f"Selected object: {self.panel.label_name(lid)} (#{lid})", 3000)
+        self.ortho.set_selected_label(lid)
+        summary = self.panel.selection_summary(lid)
+        self.statusBar().showMessage(f"Selected {self.panel.label_name(lid)} (#{lid})", 3000)
+        QToolTip.showText(QCursor.pos(), summary, self, self.rect(), 3500)
+
+    def _on_active_label_changed(self, lid):
+        self.ortho.set_selected_label(lid)
+        self.ortho.redraw_overlay()
 
     # ================================================================ layout / view
     def _on_layout_changed(self, mode):

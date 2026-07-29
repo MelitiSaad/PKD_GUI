@@ -76,6 +76,9 @@ QLabel[role="subtitle"] {{ font-size: 11px; color: {TEXT_MUTED};
 QLabel[role="muted"] {{ color: {TEXT_MUTED}; }}
 QLabel[role="metric"] {{ font-size: 22px; font-weight: 700; color: {TEXT}; }}
 QLabel[role="metricUnit"] {{ font-size: 12px; color: {TEXT_MUTED}; }}
+QLabel[role="activeObject"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT};
+    border-radius: 8px; padding: 8px 10px; color: {TEXT}; font-weight: 600; }}
+QLabel#EmptyState {{ color: {TEXT_MUTED}; font-size: 15px; line-height: 1.5; }}
 
 /* ---- buttons ---- */
 QPushButton {{

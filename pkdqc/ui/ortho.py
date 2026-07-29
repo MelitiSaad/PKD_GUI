@@ -181,8 +181,10 @@ class PlaneWidget(QWidget):
 
         self.img_item = pg.ImageItem()
         self.seg_item = pg.ImageItem(); self.seg_item.setZValue(10)
+        self.selected_item = pg.ImageItem(); self.selected_item.setZValue(11)
         self.vb.addItem(self.img_item)
         self.vb.addItem(self.seg_item)
+        self.vb.addItem(self.selected_item)
 
         pen = QPen(QColor(theme.ACCENT)); pen.setCosmetic(True); pen.setWidthF(0.8)
         pen.setStyle(Qt.PenStyle.DashLine)
@@ -222,11 +224,28 @@ class PlaneWidget(QWidget):
     def _refresh_overlay(self):
         seg = self.owner.seg
         if seg is None:
-            self.seg_item.clear(); return
+            self.seg_item.clear(); self.selected_item.clear(); return
         lut = seg.labels.lut()
         max_id = max(1, lut.shape[0] - 1)
-        self.seg_item.setImage(self.plane.slice2d(seg.data, self.owner.cursor),
-                               autoLevels=False, levels=(0, max_id), lut=lut)
+        current = self.plane.slice2d(seg.data, self.owner.cursor)
+        self.seg_item.setImage(current, autoLevels=False, levels=(0, max_id), lut=lut)
+        selected = self.owner.selected_label_id
+        if selected is None:
+            self.selected_item.clear()
+            return
+        lab = seg.labels.labels.get(selected)
+        if lab is None or not lab.visible:
+            self.selected_item.clear()
+            return
+        # A lightweight alpha mask makes the selected object obvious without
+        # altering the label overlay or adding work to live brush strokes.
+        mask = current == np.uint16(selected)
+        if not mask.any():
+            self.selected_item.clear()
+            return
+        color = np.array([[0, 0, 0, 0], [*lab.color, 76]], dtype=np.uint8)
+        self.selected_item.setImage(mask.astype(np.uint8), autoLevels=False,
+                                    levels=(0, 1), lut=color)
 
     def redraw_overlay(self):
         """Coalesce pointer-rate overlay uploads into one event-loop frame.
@@ -312,6 +331,7 @@ class OrthoView(QWidget):
         self.cursor = [0, 0, 0]
         self.window = (0.0, 1.0)
         self.controller = None
+        self.selected_label_id = None
         self.continuous_3d = False
         self._layout_mode = "grid"
         self._enable_3d = enable_3d and volume_view.available()
@@ -319,6 +339,10 @@ class OrthoView(QWidget):
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(2, 2, 2, 2)
         self.grid.setSpacing(2)
+        self.empty_hint = QLabel("Open an image to begin\n\nLoad a CT or MRI volume, then review or add a segmentation.")
+        self.empty_hint.setObjectName("EmptyState")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setWordWrap(True)
 
         self.planes: Dict[str, PlaneWidget] = {name: PlaneWidget(PLANES[name], self) for name in ORDER}
 
@@ -339,9 +363,12 @@ class OrthoView(QWidget):
 
     # -- layout ----------------------------------------------------------
     def _relayout(self):
-        for w in self._cells.values():
+        for w in (*self._cells.values(), self.empty_hint):
             self.grid.removeWidget(w); w.hide()
-        if self._layout_mode == "grid":
+        if self.image is None:
+            self.grid.addWidget(self.empty_hint, 0, 0, 2, 2)
+            self.empty_hint.show()
+        elif self._layout_mode == "grid":
             self.grid.addWidget(self._cells[ORDER[0]], 0, 0)
             self.grid.addWidget(self._cells[ORDER[1]], 0, 1)
             self.grid.addWidget(self._cells[ORDER[2]], 1, 0)
@@ -374,6 +401,8 @@ class OrthoView(QWidget):
     def set_data(self, image, seg):
         self.image = image
         self.seg = seg
+        self.selected_label_id = int(seg.active_id) if seg is not None else None
+        self._relayout()
         self.window = image.default_window if image is not None else (0.0, 1.0)
         self.cursor = [s // 2 for s in image.shape] if image is not None else [0, 0, 0]
         for p in self.planes.values():
@@ -396,6 +425,10 @@ class OrthoView(QWidget):
     def refresh_all(self):
         for p in self.planes.values():
             p.refresh()
+
+    def set_selected_label(self, lid: int | None):
+        self.selected_label_id = None if lid is None else int(lid)
+        self.redraw_overlay()
 
     def redraw_overlay(self, plane=None):
         """Refresh a segmentation overlay.
