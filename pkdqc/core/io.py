@@ -16,6 +16,7 @@ import numpy as np
 from .labels import LabelTable
 from .segmentation import Segmentation
 from .volume import ImageVolume
+from .validation import SegmentationValidationError, validated_labels
 
 NIFTI_EXT = (".nii", ".nii.gz")
 
@@ -40,8 +41,7 @@ def _load_nifti(path: str, as_int: bool):
     if len(spacing) < 3:
         spacing = tuple(list(spacing) + [1.0] * (3 - len(spacing)))
     if as_int:
-        data = np.asanyarray(img.dataobj)
-        data = np.rint(data).astype(np.uint16)
+        data = validated_labels(np.asanyarray(img.dataobj))
     else:
         data = np.asanyarray(img.dataobj).astype(np.float32)
     data = np.ascontiguousarray(data)
@@ -164,9 +164,11 @@ def load_segmentation(path: str, ref_shape: Tuple[int, int, int],
             data, _spacing, affine = _load_nifti(path, as_int=True)
         else:
             arr, _spacing, affine = _load_dicom_series(path)
-            data = np.rint(arr).astype(np.uint16)
+            data = validated_labels(arr)
     except LoadError:
         raise
+    except SegmentationValidationError as exc:
+        raise LoadError(f"Invalid segmentation '{os.path.basename(path)}': {exc}") from exc
     except Exception as exc:
         raise LoadError(f"Could not read segmentation '{os.path.basename(path)}': {exc}") from exc
 

@@ -28,34 +28,77 @@ class History:
         self.clear()
 
     def push(self, cmd: Optional[EditCommand]) -> None:
-        """Record an already-applied command and clear the redo stack."""
+        """Execute and record a command atomically."""
         if cmd is None or cmd.is_empty():
             return
-        self._undo.append(cmd)
-        self._bytes += cmd.nbytes
-        self._redo.clear()
-        self._enforce_cap()
-        self._changed()
+        cmd.validate_for(self.seg)
+        data_before = self.seg.data.copy()
+        state = (list(self._undo), list(self._redo), self._bytes,
+                 self.seg.revision, self.seg.dirty, set(self.seg.edited_slices))
+        try:
+            cmd.redo(self.seg)
+            self._undo.append(cmd)
+            self._bytes += cmd.nbytes
+            self._redo.clear()
+            self._enforce_cap()
+            self._changed()
+        except BaseException:
+            self.seg.data[...] = data_before
+            self._undo[:], self._redo[:], self._bytes = state[0], state[1], state[2]
+            self.seg.revision, self.seg.dirty = state[3], state[4]
+            self.seg.edited_slices = state[5]
+            raise
+
+    def record_applied(self, cmd: Optional[EditCommand]) -> None:
+        """Atomically record a live-applied stroke, rolling it back on failure."""
+        if cmd is None or cmd.is_empty():
+            return
+        cmd.validate_for(self.seg)
+        # The command's old values are a byte-exact rollback snapshot.
+        state = (list(self._undo), list(self._redo), self._bytes,
+                 self.seg.revision, self.seg.dirty, set(self.seg.edited_slices))
+        try:
+            self._undo.append(cmd); self._bytes += cmd.nbytes; self._redo.clear()
+            self._enforce_cap(); self.seg.mark_edited(cmd.slices); self._changed()
+        except BaseException:
+            self.seg.data.reshape(-1)[cmd.flat_idx] = cmd.old_vals
+            self._undo[:], self._redo[:], self._bytes = state[0], state[1], state[2]
+            self.seg.revision, self.seg.dirty = state[3], state[4]
+            self.seg.edited_slices = state[5]
+            raise
 
     def undo(self) -> Optional[EditCommand]:
         if not self._undo:
             return None
-        cmd = self._undo.pop()
-        self._bytes -= cmd.nbytes
-        cmd.undo(self.seg)
-        self._redo.append(cmd)
-        self._changed()
+        before = self.seg.data.copy()
+        state = (list(self._undo), list(self._redo), self._bytes,
+                 self.seg.revision, self.seg.dirty, set(self.seg.edited_slices))
+        cmd = self._undo[-1]
+        try:
+            cmd.undo(self.seg); self._undo.pop(); self._bytes -= cmd.nbytes
+            self._redo.append(cmd); self._changed()
+        except BaseException:
+            self.seg.data[...] = before
+            self._undo[:], self._redo[:], self._bytes = state[:3]
+            self.seg.revision, self.seg.dirty, self.seg.edited_slices = state[3], state[4], state[5]
+            raise
         return cmd
 
     def redo(self) -> Optional[EditCommand]:
         if not self._redo:
             return None
-        cmd = self._redo.pop()
-        cmd.redo(self.seg)
-        self._undo.append(cmd)
-        self._bytes += cmd.nbytes
-        self._enforce_cap()
-        self._changed()
+        before = self.seg.data.copy()
+        state = (list(self._undo), list(self._redo), self._bytes,
+                 self.seg.revision, self.seg.dirty, set(self.seg.edited_slices))
+        cmd = self._redo[-1]
+        try:
+            cmd.redo(self.seg); self._redo.pop(); self._undo.append(cmd)
+            self._bytes += cmd.nbytes; self._enforce_cap(); self._changed()
+        except BaseException:
+            self.seg.data[...] = before
+            self._undo[:], self._redo[:], self._bytes = state[:3]
+            self.seg.revision, self.seg.dirty, self.seg.edited_slices = state[3], state[4], state[5]
+            raise
         return cmd
 
     def clear(self) -> None:

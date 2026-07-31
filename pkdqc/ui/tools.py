@@ -15,9 +15,10 @@ from PySide6.QtCore import QObject, Signal
 
 from ..config import DEFAULT_BRUSH_RADIUS, MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS
 from ..core import segops
-from ..core.commands import StrokeRecorder
+from ..core.commands import StrokeRecorder, combine_commands
 from ..core.history import History
 from ..core.segops import disk_offsets
+from ..core.label_policy import policy_for
 
 PAINT_TOOLS = {"brush"}
 BRUSH_MODES = ("normal", "threshold")
@@ -106,7 +107,10 @@ class ToolController(QObject):
         )
         self.cancel_lasso()
         if cmd is not None:
-            self.history.push(cmd)
+            if self.tool in CLICK_TOOLS:
+                self.history.push(cmd)
+            else:
+                self.history.record_applied(cmd)
             self.ortho.redraw_overlay()
             self.ortho.flash_lasso(plane, vertices)
             self.ortho.notify_edit()
@@ -156,13 +160,9 @@ class ToolController(QObject):
             vals = self.image.data[ii, jj, kk]
             keep = (vals >= lo) & (vals <= hi)
             ii, jj, kk = ii[keep], jj[keep], kk[keep]
-        if ii.size and value != 0 and self.protect_existing:
-            keep = segops.paintable_mask(self.seg.data[ii, jj, kk], value, True)
-            ii, jj, kk = ii[keep], jj[keep], kk[keep]
-        elif ii.size and value == 0:
-            # Safe default: erasing is scoped to the selected object.  A
-            # future explicit expert "erase all labels" policy may opt out.
-            keep = segops.paintable_mask(self.seg.data[ii, jj, kk], 0, True, self.seg.active_id)
+        if ii.size:
+            keep = policy_for(self.seg, protect_existing=self.protect_existing).writable(
+                self.seg.data[ii, jj, kk], value)
             ii, jj, kk = ii[keep], jj[keep], kk[keep]
         self._rec.stamp_voxels(ii, jj, kk, value)
 
@@ -183,25 +183,38 @@ class ToolController(QObject):
         self._paint_val = self._value_for(right)
         self._rec = StrokeRecorder(self.seg, self.tool)
         self._last_vh = (v, h)
-        self._plane_stamp(plane, v, h, self._paint_val)
+        try:
+            self._plane_stamp(plane, v, h, self._paint_val)
+        except BaseException:
+            self._abort_stroke()
+            raise
         self.ortho.redraw_overlay(plane)
 
     def plane_paint_move(self, plane, v, h, right=False) -> None:
         if self._rec is None:
             return
         v0, h0 = self._last_vh
-        self._plane_stamp_line(plane, v0, h0, v, h, self._paint_val)
+        try:
+            self._plane_stamp_line(plane, v0, h0, v, h, self._paint_val)
+        except BaseException:
+            self._abort_stroke()
+            raise
         self._last_vh = (v, h)
         self.ortho.redraw_overlay(plane)
 
     def plane_paint_end(self) -> None:
         if self._rec is None:
             return
-        cmd = self._rec.commit()
+        recorder = self._rec
+        cmd = recorder.commit()
         self._rec = None
         self._last_vh = None
         if cmd is not None and self.history is not None:
-            self.history.push(cmd)
+            try:
+                self.history.record_applied(cmd)
+            except BaseException:
+                recorder.rollback()
+                raise
             self.ortho.redraw_overlay()
             self.ortho.notify_edit()
             self.edited.emit()
@@ -211,17 +224,31 @@ class ToolController(QObject):
             return
         if self.tool in CLICK_TOOLS:
             value = 0 if right else int(self.seg.active_id)
-            cmd = segops.flood_fill_plane(self.seg, plane, self.ortho.cursor, v, h, value)
+            cmd = segops.flood_fill_plane(self.seg, plane, self.ortho.cursor, v, h, value,
+                                             policy=policy_for(self.seg, protect_existing=self.protect_existing))
         else:
             self._rec = StrokeRecorder(self.seg, self.tool)
-            self._plane_stamp(plane, v, h, self._value_for(right))
-            cmd = self._rec.commit()
+            try:
+                self._plane_stamp(plane, v, h, self._value_for(right))
+                cmd = self._rec.commit()
+            except BaseException:
+                self._abort_stroke()
+                raise
             self._rec = None
         if cmd is not None:
-            self.history.push(cmd)
+            if self.tool in CLICK_TOOLS:
+                self.history.push(cmd)
+            else:
+                self.history.record_applied(cmd)
             self.ortho.redraw_overlay()
             self.ortho.notify_edit()
             self.edited.emit()
+
+    def _abort_stroke(self) -> None:
+        if self._rec is not None:
+            self._rec.rollback()
+        self._rec = None
+        self._last_vh = None
 
     # -- region actions (toolbar) ---------------------------------------
     def _run(self, cmd) -> None:
@@ -250,6 +277,8 @@ class ToolController(QObject):
         lid = int(self.seg.active_id)
         S = self.seg.data.shape[2]
         annotated = [z for z in range(S) if (self.seg.data[:, :, z] == lid).any()]
-        for a, b in zip(annotated, annotated[1:]):
-            if b - a > 1:
-                self._run(segops.interpolate_between(self.seg, lid, a, b))
+        commands = [
+            segops.interpolate_between(self.seg, lid, a, b)
+            for a, b in zip(annotated, annotated[1:]) if b - a > 1
+        ]
+        self._run(combine_commands(commands, "interpolate slices"))

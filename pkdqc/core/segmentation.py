@@ -12,14 +12,13 @@ from typing import Iterable, Set
 import numpy as np
 
 from .labels import LabelTable
+from .validation import validated_labels
 
 
 class Segmentation:
     def __init__(self, data: np.ndarray, labels: LabelTable | None = None):
-        if data.ndim != 3:
-            raise ValueError(f"Segmentation must be 3D, got {data.shape}")
-        # uint16 is plenty for object counts and keeps the volume light.
-        self.data = np.ascontiguousarray(data.astype(np.uint16))
+        # Validate before conversion: labels must never be rounded or wrapped.
+        self.data = validated_labels(data)
         ids = np.unique(self.data)
         self.labels = labels or LabelTable.from_ids(ids)
         self.active_id: int = next(iter(self.labels)).id if len(self.labels) else 1

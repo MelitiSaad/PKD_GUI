@@ -16,6 +16,7 @@ from scipy import ndimage as ndi
 from . import commands
 from .commands import EditCommand
 from .segmentation import Segmentation
+from .label_policy import DrawOver, LabelProtectionPolicy, policy_for
 
 
 def _label_mask(seg: Segmentation, label_id: int, z: Optional[int]) -> np.ndarray:
@@ -25,18 +26,13 @@ def _label_mask(seg: Segmentation, label_id: int, z: Optional[int]) -> np.ndarra
 
 def paintable_mask(current_values: np.ndarray, value: int, protect_existing: bool,
                    erase_label: int | None = None) -> np.ndarray:
-    """Return voxels a brush may modify under the selected paint policy.
-
-    Protected painting adds only to background (and permits repainting the active
-    label), while erasing deliberately remains unrestricted.  Keeping the rule
-    in the Qt-free core makes it easy to reuse for future lasso/threshold tools.
-    """
-    if value == 0 and erase_label is not None:
-        return np.asarray(current_values) == np.uint16(erase_label)
-    if not protect_existing or value == 0:
-        return np.ones(np.asarray(current_values).shape, dtype=bool)
-    values = np.asarray(current_values)
-    return (values == 0) | (values == np.uint16(value))
+    """Compatibility wrapper around the shared label-protection policy."""
+    policy = LabelProtectionPolicy(
+        DrawOver.BACKGROUND_ONLY if protect_existing else DrawOver.ALL_PERMITTED,
+        selected_label=erase_label if erase_label is not None else int(value),
+        erase_selected_only=erase_label is not None,
+    )
+    return policy.writable(current_values, value)
 
 
 # ---------------------------------------------------------------------- lasso
@@ -73,7 +69,8 @@ def rasterize_lasso(shape: tuple[int, int], vertices) -> np.ndarray:
 
 
 def apply_lasso_plane(seg: Segmentation, plane, cursor, vertices, value: int,
-                      protect_existing: bool = True, remove_label: int | None = None) -> Optional[EditCommand]:
+                      protect_existing: bool = True, remove_label: int | None = None,
+                      policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Apply one lasso add/remove operation to one MPR plane as one command.
 
     The current plane is rasterised then mapped through ``plane`` rather than
@@ -85,12 +82,15 @@ def apply_lasso_plane(seg: Segmentation, plane, cursor, vertices, value: int,
     if not mask.any():
         return None
     updated = current.copy()
+    policy = policy or policy_for(seg, protect_existing=protect_existing)
     if value == 0:
-        removable = mask if remove_label is None else mask & (current == np.uint16(remove_label))
+        removable = mask & policy.writable(current, 0)
+        if remove_label is not None:
+            removable &= current == np.uint16(remove_label)
         updated[removable] = 0
         description = "lasso remove"
     else:
-        writable = mask & paintable_mask(current, value, protect_existing)
+        writable = mask & policy.writable(current, value)
         updated[writable] = np.uint16(value)
         description = "lasso add"
     return commands.apply_plane_slice(seg, plane, cursor, updated, description)
@@ -98,7 +98,7 @@ def apply_lasso_plane(seg: Segmentation, plane, cursor, vertices, value: int,
 
 # --------------------------------------------------------------------- fill
 def flood_fill(seg: Segmentation, z: int, row: int, col: int, value: int,
-               connectivity: int = 1) -> Optional[EditCommand]:
+               connectivity: int = 1, policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Region-grow from (row, col) over connected voxels of equal value on axial slice z."""
     sl = seg.data[:, :, z]
     seed_val = sl[row, col]
@@ -108,13 +108,14 @@ def flood_fill(seg: Segmentation, z: int, row: int, col: int, value: int,
     same = sl == seed_val
     labeled, _ = ndi.label(same, structure=structure)
     target = labeled == labeled[row, col]
+    target &= (policy or policy_for(seg)).writable(sl, value)
     new_slice = sl.copy()
     new_slice[target] = np.uint16(value)
     return commands.apply_slice(seg, z, new_slice, "flood fill")
 
 
 def flood_fill_plane(seg: Segmentation, plane, cursor, v: int, h: int, value: int,
-                     connectivity: int = 1) -> Optional[EditCommand]:
+                     connectivity: int = 1, policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Flood fill on an arbitrary plane's 2D slice, written back to the volume."""
     sl = plane.slice2d(seg.data, cursor)
     seed_val = sl[v, h]
@@ -123,6 +124,7 @@ def flood_fill_plane(seg: Segmentation, plane, cursor, v: int, h: int, value: in
     structure = ndi.generate_binary_structure(2, connectivity)
     labeled, _ = ndi.label(sl == seed_val, structure=structure)
     target = labeled == labeled[v, h]
+    target &= (policy or policy_for(seg)).writable(sl, value)
     new_slice = sl.copy()
     new_slice[target] = np.uint16(value)
     return commands.apply_plane_slice(seg, plane, cursor, new_slice, "flood fill")
@@ -130,13 +132,15 @@ def flood_fill_plane(seg: Segmentation, plane, cursor, v: int, h: int, value: in
 
 # ------------------------------------------------------------ grow / shrink
 def grow(seg: Segmentation, label_id: int, iterations: int = 1,
-         in_3d: bool = True, z: Optional[int] = None) -> Optional[EditCommand]:
+         in_3d: bool = True, z: Optional[int] = None,
+         policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Dilate a label into surrounding background only (never overwrites others)."""
+    policy = policy or policy_for(seg, selected_label=label_id)
     if in_3d:
         mask = seg.data == np.uint16(label_id)
         st = ndi.generate_binary_structure(3, 1)
         grown = ndi.binary_dilation(mask, structure=st, iterations=iterations)
-        add = grown & (seg.data == 0)
+        add = grown & (policy.writable(seg.data, label_id))
         if not add.any():
             return None
         new = seg.data.copy()
@@ -146,7 +150,7 @@ def grow(seg: Segmentation, label_id: int, iterations: int = 1,
     mask = sl == np.uint16(label_id)
     st = ndi.generate_binary_structure(2, 1)
     grown = ndi.binary_dilation(mask, structure=st, iterations=iterations)
-    add = grown & (sl == 0)
+    add = grown & (policy.writable(sl, label_id))
     if not add.any():
         return None
     new = sl.copy()
@@ -155,13 +159,15 @@ def grow(seg: Segmentation, label_id: int, iterations: int = 1,
 
 
 def shrink(seg: Segmentation, label_id: int, iterations: int = 1,
-           in_3d: bool = True, z: Optional[int] = None) -> Optional[EditCommand]:
+           in_3d: bool = True, z: Optional[int] = None,
+           policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Erode a label; removed voxels become background."""
+    policy = policy or policy_for(seg, selected_label=label_id)
     if in_3d:
         mask = seg.data == np.uint16(label_id)
         st = ndi.generate_binary_structure(3, 1)
         eroded = ndi.binary_erosion(mask, structure=st, iterations=iterations)
-        remove = mask & ~eroded
+        remove = mask & ~eroded & policy.writable(seg.data, 0)
         if not remove.any():
             return None
         new = seg.data.copy()
@@ -171,7 +177,7 @@ def shrink(seg: Segmentation, label_id: int, iterations: int = 1,
     mask = sl == np.uint16(label_id)
     st = ndi.generate_binary_structure(2, 1)
     eroded = ndi.binary_erosion(mask, structure=st, iterations=iterations)
-    remove = mask & ~eroded
+    remove = mask & ~eroded & policy.writable(sl, 0)
     if not remove.any():
         return None
     new = sl.copy()
@@ -181,8 +187,10 @@ def shrink(seg: Segmentation, label_id: int, iterations: int = 1,
 
 # -------------------------------------------------------------- clean-up ops
 def remove_islands(seg: Segmentation, label_id: int, min_size: int = 20,
-                   in_3d: bool = True, z: Optional[int] = None) -> Optional[EditCommand]:
+                   in_3d: bool = True, z: Optional[int] = None,
+                   policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Remove connected components of a label smaller than ``min_size`` voxels."""
+    policy = policy or policy_for(seg, selected_label=label_id)
     mask = _label_mask(seg, label_id, None if in_3d else z)
     rank = 3 if in_3d else 2
     st = ndi.generate_binary_structure(rank, 1)
@@ -194,6 +202,8 @@ def remove_islands(seg: Segmentation, label_id: int, min_size: int = 20,
     if not small:
         return None
     remove = np.isin(labeled, list(small))
+    source = seg.data if in_3d else seg.data[:, :, z]
+    remove &= policy.writable(source, 0)
     if in_3d:
         new = seg.data.copy()
         new[remove] = 0
@@ -204,11 +214,13 @@ def remove_islands(seg: Segmentation, label_id: int, min_size: int = 20,
 
 
 def fill_holes(seg: Segmentation, label_id: int, in_3d: bool = True,
-               z: Optional[int] = None) -> Optional[EditCommand]:
+               z: Optional[int] = None, policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Fill fully-enclosed background holes inside a label."""
+    policy = policy or policy_for(seg, selected_label=label_id)
     mask = _label_mask(seg, label_id, None if in_3d else z)
     filled = ndi.binary_fill_holes(mask)
-    add = filled & ~mask
+    source = seg.data if in_3d else seg.data[:, :, z]
+    add = filled & ~mask & policy.writable(source, label_id)
     if not add.any():
         return None
     if in_3d:
@@ -232,13 +244,15 @@ def _signed_distance(mask: np.ndarray) -> np.ndarray:
     return (inside - outside).astype(np.float32)
 
 
-def interpolate_between(seg: Segmentation, label_id: int, z0: int, z1: int) -> Optional[EditCommand]:
+def interpolate_between(seg: Segmentation, label_id: int, z0: int, z1: int,
+                        policy: LabelProtectionPolicy | None = None) -> Optional[EditCommand]:
     """Morphological contour interpolation of a label between two edited slices.
 
     Uses signed-distance-field blending — the standard 3D-Slicer / ITK-SNAP
     "fill between slices" technique — so a reviewer can annotate every Nth slice
     and let the tool fill the gaps.
     """
+    policy = policy or policy_for(seg, selected_label=label_id)
     lo, hi = (z0, z1) if z0 < z1 else (z1, z0)
     if hi - lo < 2:
         return None
@@ -254,7 +268,8 @@ def interpolate_between(seg: Segmentation, label_id: int, z0: int, z1: int) -> O
         blended = (1.0 - w) * sdf0 + w * sdf1
         mask_z = blended >= 0.0
         sl = new[:, :, z]
-        sl[mask_z] = np.uint16(label_id)   # add interpolated region, keep existing edits
+        writable = policy.writable(sl, label_id)
+        sl[mask_z & writable] = np.uint16(label_id)
     return commands.apply_volume(seg, new, "interpolate slices")
 
 

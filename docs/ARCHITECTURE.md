@@ -1,0 +1,115 @@
+# Architecture and data flow
+
+## Current architecture
+
+```mermaid
+flowchart TD
+  E[python -m pkdqc] --> A[app.run]
+  A --> Q[QApplication/theme/logging/excepthook]
+  Q --> M[MainWindow]
+  M --> O[OrthoView + 3 PlaneWidgets]
+  M --> T[ToolController]
+  M --> P[LabelPanel]
+  M --> V[optional Volume3DView]
+  M --> IO[core.io]
+  IO --> I[ImageVolume: float32 data/spacing/affine]
+  IO --> S[Segmentation: uint16 data/labels/revision]
+  T --> C[segops + StrokeRecorder/EditCommand]
+  C --> S
+  C --> H[History]
+  M --> SS[Session full-array checkpoint]
+  P --> VM[volumetry]
+  O --> R[pyqtgraph slice/LUT rendering]
+  V --> MC[VTK/PyVista marching cubes]
+```
+
+Qt-free `core` is mostly a domain layer; `MainWindow` is composition root and controller;
+`OrthoView` owns display/navigation interaction; `ToolController` translates gestures into
+domain commands. `layers.py` sketches a future multi-segmentation model but is unused.
+
+## Startup through shutdown
+
+1. `pkdqc.__main__` calls `app.run`; logging, QApplication, theme and exception hook are
+   installed, then `MainWindow(enable_3d=True)` is shown.
+2. Startup scans per-user session directories and optionally reloads the source image and
+   `labels.npy`. Only array shape is checked before recovery.
+3. Opening NIfTI uses nibabel closest-canonical RAS+, float32 image data, zoom spacing and
+   canonical affine. DICOM recursively reads every pixel-bearing file and stacks frames.
+4. Loading labels independently canonicalizes NIfTI, requires equal shape and approximately
+   equal canonical affine, then creates label metadata from unique IDs.
+5. `_set_case` creates history/controller/view/panel/session state, centers the crosshair,
+   computes volume, and schedules a synchronous 3D build.
+6. Plane extraction transposes and flips the two in-plane axes. One shared voxel cursor
+   selects depth in all panes. `Plane.disp_to_vox*` is the inverse used for edits.
+7. Brush/lasso mutate the contiguous segmentation immediately, then commit a flat-index
+   old/new diff. Region operations create replacement arrays then derive a diff. History
+   restores exact voxel values; refresh, dirty state, and autosave are controller signals.
+8. Periodic/idle/edit-count autosave synchronously writes the entire array to `.npy`, then
+   JSON metadata. Manual save writes a temporary NIfTI using the image affine and renames it.
+9. Close autosaves and then marks/removes the session regardless of manual-save status.
+
+## Geometry contract (current and required)
+
+Current NIfTI internal axes are nibabel RAS+ `(X,Y,Z)`, despite some legacy variable names
+`row,col,slice`. Spacing aligns with those array axes. Axial depth is Z, coronal Y, sagittal
+X. Pixel aspect uses physical in-plane spacing. This is self-consistent for canonical NIfTI.
+DICOM violates the same contract because identity affine cannot express patient location or
+orientation.
+
+Required invariant:
+
+```text
+world_ras_mm = affine_ras @ [i, j, k, 1]
+seg.shape == image.shape
+allclose(seg.affine, image.affine) OR explicit nearest-neighbor resampling is approved
+display voxel <-> source voxel is a tested bijection
+label resampling is nearest-neighbor only
+volume_mm3 = count * abs(det(affine[:3,:3]))
+```
+
+Use the affine determinant rather than only zoom products as the authoritative voxel volume,
+while rejecting shear/non-orthogonal cases that the viewer cannot faithfully model. Display
+patient-axis markers must derive from affine, never pane names or hard-coded flips.
+
+## Edit/save flow
+
+```mermaid
+sequenceDiagram
+  actor R as Reviewer
+  participant UI as PlaneWidget/ToolController
+  participant S as Segmentation
+  participant H as History
+  participant A as Autosave
+  participant D as Disk
+  R->>UI: pointer stroke
+  UI->>S: apply live voxel stamps
+  UI->>H: push one old/new voxel diff
+  UI-->>R: coalesced overlay refresh
+  UI->>A: dirty/revision notification
+  A->>D: atomic labels.npy then meta.json
+  R->>UI: Save current path or Save As
+  UI->>D: temporary NIfTI + atomic replace
+```
+
+## Rendering and controls
+
+Image slices are uploaded with window levels; integer label slices use an RGBA LUT and an
+extra selected-label alpha mask. Wheel changes the active pane depth, Ctrl-wheel zooms,
+Alt-wheel changes voxel-radius brush size, middle drag pans, and right drag zooms except
+when Brush/Lasso scopes it to active-label erase. Crosshairs update all planes. A 3D mesh is
+built on demand or continuously; failures are isolated by an unavailable placeholder, but
+actual builds are synchronous.
+
+## Recommended incremental target
+
+Keep the current core/UI separation; do not rewrite. Add (1) validated `ImageGeometry` and
+`LabelVolume` input contracts, (2) `CaseDocument` owning the reference image, optional comparison layers, editable
+layers, provenance and lifecycle, (3) transactional edit/compound-command services, and
+(4) revision-aware background task services. `MainWindow` should coordinate these services,
+not own persistence and computation details. Workers return results tagged with document and
+revision; stale results are discarded on the UI thread.
+
+
+## Product scope clarification (Round 1A)
+
+The target is a general-purpose segmentation workstation: a user may load and edit an existing mask or create a blank mask and segment manually. AI QC is one important workflow. Organ and cyst files are independent and opened one at a time. Standard Save writes the current segmentation path; Save As selects a path/format, and an explicit confirmed overwrite is valid. Comparison baselines and provenance sidecars may be optional future features, never mandatory foundations.

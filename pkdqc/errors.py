@@ -63,7 +63,7 @@ def gui_guard(fn):
                 QMessageBox.warning(
                     parent,
                     "Action could not be completed",
-                    f"“{fn.__name__}” failed. Your segmentation was not changed.\n"
+                    f"“{fn.__name__}” failed.\n"
                     "The error has been logged.",
                 )
             except Exception:
