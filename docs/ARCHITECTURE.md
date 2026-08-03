@@ -18,6 +18,7 @@ flowchart TD
   C --> S
   C --> H[History]
   M --> SS[Session full-array checkpoint]
+  M --> D[SegmentationDocument lifecycle/save state]
   P --> VM[volumetry]
   O --> R[pyqtgraph slice/LUT rendering]
   V --> MC[VTK/PyVista marching cubes]
@@ -46,7 +47,8 @@ domain commands. `layers.py` sketches a future multi-segmentation model but is u
    restores exact voxel values; refresh, dirty state, and autosave are controller signals.
 8. Periodic/idle/edit-count autosave synchronously writes the entire array to `.npy`, then
    JSON metadata. Manual save writes a temporary NIfTI using the image affine and renames it.
-9. Close autosaves and then marks/removes the session regardless of manual-save status.
+9. Close and case replacement pass through the shared dirty-document guard. Save must finish,
+   Discard explicitly removes the checkpoint, and Cancel preserves the complete current case.
 
 ## Geometry contract (current and required)
 
@@ -90,6 +92,12 @@ sequenceDiagram
   R->>UI: Save current path or Save As
   UI->>D: temporary NIfTI + atomic replace
 ```
+
+`SegmentationDocument` is the Qt-free authority for the current segmentation path,
+never-saved status, saved revision, and revision-derived dirty state. `MainWindow` injects
+native path/overwrite decisions and uses one document guard for close, image replacement,
+segmentation replacement, blank creation, and drag/drop replacement. Save commits the saved
+revision (and Save As commits its new path) only after the atomic writer returns successfully.
 
 ## Rendering and controls
 
