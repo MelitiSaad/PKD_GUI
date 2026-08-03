@@ -1,9 +1,9 @@
 # PKD Segmentation QC
 
-A desktop tool for **quality-controlling kidney segmentations and measuring volumes**.
+A general-purpose desktop medical-image segmentation editor with streamlined **AI quality-control and volumetry workflows**.
 A separate AI produces the segmentation; this app is where you overlay that label
 volume on the image, correct it slice by slice, and read off the corrected volume
-in mm³ and mL. There is no AI inside this app.
+in mm³ and mL. Users can edit an existing/AI segmentation or create a blank segmentation manually. There is no AI inside this app.
 
 This is a ground-up rewrite of the original PyQt5 + matplotlib tool, rebuilt around
 a fast viewer, a real data model, and always-on crash safety.
@@ -153,7 +153,7 @@ make_preview.py  headless integration run that renders preview PNGs
 
 The source-level ITK-SNAP review and staged implementation roadmap are recorded
 in [`docs/ITKSNAP_REVIEW_AND_ROADMAP.md`](docs/ITKSNAP_REVIEW_AND_ROADMAP.md).
-It documents which ideas are appropriate for a focused kidney AI-segmentation QC
+It documents which ideas are appropriate for a general-purpose segmentation workstation with a streamlined AI-QC
 workflow and which general-purpose workstation features are intentionally out of
 scope.
 

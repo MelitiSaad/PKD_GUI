@@ -35,6 +35,7 @@ class Label:
     name: str
     color: Tuple[int, int, int]
     visible: bool = True
+    locked: bool = False
 
 
 @dataclass

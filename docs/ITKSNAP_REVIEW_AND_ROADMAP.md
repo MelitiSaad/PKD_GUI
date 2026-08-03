@@ -17,7 +17,7 @@ pipelines.
 PKD QC should borrow ITK-SNAP's *engineering patterns*—explicit image geometry,
 shared MPR cursor, diff-based edits, cached/demand-driven work, and contextual
 tools—but not its broad, mode-heavy workstation.  The product remains a
-single-purpose workflow:
+general-purpose workstation workflow that prominently supports:
 
 1. Open CT.
 2. Load AI labels.
@@ -117,7 +117,7 @@ than expanding the always-visible tool rail.
    conservative tolerance defaults and preview-before-apply.
 3. **Focused label guards:** lock, isolate, hide other labels, paint-inside, and
    paint-outside policies.  Each must be visible as a small current-policy chip.
-4. **Original AI comparison:** retain an immutable AI baseline in the session;
+4. **Optional original comparison:** when later implemented, retain a read-only comparison snapshot in the session;
    offer hold-to-compare or a subtle diff/outline, not duplicate permanent
    overlays by default.
 5. **Dirty, cancellable 3D:** run meshing off the UI thread, attach each result
@@ -237,7 +237,7 @@ the fastest manual correction tool for irregular kidney boundaries.
   selected region and changed-voxel count; Apply produces one named undo step.
 * **Make protection legible.** Never silently constrain paint.  State is shown
   beside the active label and in the status text.
-* **Keep AI provenance immutable.** The baseline is read-only, stored with
+* **Keep optional comparisons unambiguous.** A comparison snapshot, when used, is read-only and stored with
   session metadata where feasible, and never confused with the editable result.
 * **Protect editing from background work.** 3D and statistics operate from a
   snapshot/revision and cannot block brush interaction or overwrite newer data.

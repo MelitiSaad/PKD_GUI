@@ -2,8 +2,7 @@
 
 ## Shared document model
 
-Each case contains an immutable image, immutable AI baseline(s), editable ordinary label-map
-layer(s), label metadata, review metadata, provenance and revisioned recovery. Organ and cyst
+Each case contains a reference image and one editable ordinary label map, whether loaded from an existing/AI file or created blank. Optional comparison layers and review metadata may be added later. Organ and cyst
 files remain separate normal segmentations; no artificial organ–cyst hierarchy is introduced.
 Connected components are ephemeral indexes `(component id, label id, bbox, centroid, voxel
 count, largest-slice location, flags)` and never replace saved label values.
@@ -21,7 +20,7 @@ count, largest-slice location, flags)` and never replace saved label values.
    compound undo action. Never infer endpoints from all label-bearing slices.
 6. A dock shows per-organ/total volume and delta from AI. Warnings identify discontinuity or
    implausible change without diagnosing disease.
-7. Save a corrected copy preserving intended numeric labels and write provenance/review sidecar.
+7. Use standard Save for the current segmentation path or Save As for a user-selected path/format; explicit confirmed overwrite is allowed and no suffix or sidecar is forced.
 
 ## Cyst region review
 

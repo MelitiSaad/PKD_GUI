@@ -49,7 +49,7 @@ Editing includes brush shapes/adaptive modes, polygon, interpolation, region com
 cutting and 3D interactions. Sessions/workspaces, image information, metadata, registration,
 statistics, mesh controls and extensive shortcuts reduce mode ambiguity for trained users.
 
-PKD QC should adopt explicit geometry validation, immutable AI baseline, label protection,
+PKD QC should adopt explicit geometry validation, optional comparison layers, label protection,
 demand-driven cached work, compound undo, stateful review navigation, and clear interaction
 feedback. It should not clone ITK-SNAP's global state, broad snake workflow, remote systems, or
 every modality/tool. Cyst-region review is a PKD-specific layer over an ordinary mask and is
@@ -61,3 +61,5 @@ For each borrowed behavior: write a product requirement without source expressio
 and geometry examples, implement against PKD QC abstractions, and add black-box tests. Record
 only the ITK-SNAP file(s) used to understand behavior. Do not paste algorithms, comments,
 constants, UI text, or code structure.
+
+The application’s scope is broad ITK-SNAP-like manual and assisted segmentation, including blank segmentations; AI review is not its sole mode. Equivalent features must continue to be independently designed and implemented without copying, translating, transplanting, or closely reproducing bundled source.

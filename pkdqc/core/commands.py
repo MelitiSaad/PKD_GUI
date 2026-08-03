@@ -8,8 +8,8 @@ single :class:`EditCommand`: a set of flat voxel indices with their *old* and
 * a compact on-disk journal for crash recovery (§ session.py),
 * trivial testability (tools are pure functions that emit commands).
 
-Tools apply their change *live* to the array for responsiveness and record the
-diff; the resulting command is pushed to the undo stack as already-applied.
+Commands are constructed and validated before mutation. History executes a
+command and records it as one rollback-capable logical transaction.
 """
 from __future__ import annotations
 
@@ -21,14 +21,18 @@ from .segmentation import Segmentation
 
 
 class EditCommand:
-    """An already-applied voxel diff. ``undo`` restores old, ``redo`` restores new."""
+    """A validated voxel diff. ``undo`` restores old, ``redo`` applies new."""
 
     __slots__ = ("flat_idx", "old_vals", "new_vals", "_slices", "description")
 
     def __init__(self, flat_idx, old_vals, new_vals, slices, description="edit"):
-        self.flat_idx = np.ascontiguousarray(flat_idx, dtype=np.int64)
-        self.old_vals = np.ascontiguousarray(old_vals, dtype=np.uint16)
-        self.new_vals = np.ascontiguousarray(new_vals, dtype=np.uint16)
+        from .validation import validated_labels
+        raw_idx = np.asarray(flat_idx)
+        if raw_idx.ndim != 1 or raw_idx.dtype.kind not in "iu" or (raw_idx < 0).any():
+            raise ValueError("Edit voxel indices must be a one-dimensional non-negative integer array")
+        self.flat_idx = np.ascontiguousarray(raw_idx, dtype=np.int64)
+        self.old_vals = validated_labels(np.asarray(old_vals).reshape(-1, 1, 1)).reshape(-1)
+        self.new_vals = validated_labels(np.asarray(new_vals).reshape(-1, 1, 1)).reshape(-1)
         self._slices = tuple(sorted({int(s) for s in slices}))
         self.description = description
 
@@ -50,6 +54,12 @@ class EditCommand:
 
     def is_empty(self) -> bool:
         return self.flat_idx.size == 0
+
+    def validate_for(self, seg: Segmentation) -> None:
+        if not (self.flat_idx.size == self.old_vals.size == self.new_vals.size):
+            raise ValueError("Edit command arrays have inconsistent lengths")
+        if self.flat_idx.size and (self.flat_idx.min() < 0 or self.flat_idx.max() >= seg.data.size):
+            raise IndexError("Edit command contains an out-of-range voxel index")
 
 
 class StrokeRecorder:
@@ -113,14 +123,42 @@ class StrokeRecorder:
             return None
         return EditCommand(flat[changed], old[changed], new[changed], self._slices, self.description)
 
+    def rollback(self) -> None:
+        """Restore every voxel touched by this live stroke exactly."""
+        if self._orig:
+            flat = np.fromiter(self._orig, dtype=np.int64, count=len(self._orig))
+            old = np.fromiter(self._orig.values(), dtype=np.uint16, count=len(self._orig))
+            self.seg.data.reshape(-1)[flat] = old
+
+
+def combine_commands(commands: Iterable[EditCommand], description: str) -> Optional[EditCommand]:
+    """Combine disjoint calculated edits into one atomic history transaction."""
+    items = [cmd for cmd in commands if cmd is not None and not cmd.is_empty()]
+    if not items:
+        return None
+    flat = np.concatenate([cmd.flat_idx for cmd in items])
+    if np.unique(flat).size != flat.size:
+        raise ValueError("Compound edit contains overlapping voxel changes")
+    return EditCommand(
+        flat,
+        np.concatenate([cmd.old_vals for cmd in items]),
+        np.concatenate([cmd.new_vals for cmd in items]),
+        (s for cmd in items for s in cmd.slices),
+        description,
+    )
+
 
 # --- builders for region edits (fill / morphology / interpolation / threshold) ---
 def apply_slice(seg: Segmentation, z: int, new_slice: np.ndarray, description: str) -> Optional[EditCommand]:
-    """Diff and apply a replacement 2D slice; returns the command (or None)."""
+    """Calculate a replacement-slice diff without mutating the segmentation."""
     z = int(z)
     R, C, _ = seg.data.shape
     old_slice = seg.data[:, :, z]
-    new_slice = new_slice.astype(np.uint16, copy=False)
+    from .validation import validated_labels
+    if new_slice.ndim != 2:
+        raise ValueError("Replacement slice must be 2D")
+    # Validate through a temporary singleton volume without lossy conversion.
+    new_slice = validated_labels(new_slice[:, :, None])[:, :, 0]
     changed = np.flatnonzero(old_slice.ravel() != new_slice.ravel())
     if changed.size == 0:
         return None
@@ -130,15 +168,16 @@ def apply_slice(seg: Segmentation, z: int, new_slice: np.ndarray, description: s
     flat = np.ravel_multi_index((rows.astype(np.intp), cols.astype(np.intp), zc), (R, C, seg.data.shape[2]))
     old = old_slice.ravel()[changed].copy()
     new = new_slice.ravel()[changed].copy()
-    seg.data[:, :, z] = new_slice
-    seg.mark_edited([z])
     return EditCommand(flat, old, new, [z], description)
 
 
 def apply_volume(seg: Segmentation, new_volume: np.ndarray, description: str,
                  slices: Optional[Iterable[int]] = None) -> Optional[EditCommand]:
-    """Diff and apply a replacement whole volume (used by 3D ops)."""
-    new_volume = new_volume.astype(np.uint16, copy=False)
+    """Calculate a replacement-volume diff without mutating the segmentation."""
+    from .validation import validated_labels
+    new_volume = validated_labels(new_volume)
+    if new_volume.shape != seg.data.shape:
+        raise ValueError("Replacement volume shape does not match segmentation")
     old_flat = seg.data.reshape(-1)
     new_flat = new_volume.reshape(-1)
     changed = np.flatnonzero(old_flat != new_flat)
@@ -149,8 +188,6 @@ def apply_volume(seg: Segmentation, new_volume: np.ndarray, description: str,
     if slices is None:
         S = seg.data.shape[2]
         slices = np.unique(changed % S).tolist()
-    seg.data[...] = new_volume
-    seg.mark_edited(slices)
     return EditCommand(changed.astype(np.int64), old, new, slices, description)
 
 
@@ -158,7 +195,8 @@ def apply_plane_slice(seg: Segmentation, plane, cursor, new_slice2d: np.ndarray,
                       description: str) -> Optional[EditCommand]:
     """Diff a replacement 2D slice on an arbitrary plane and apply it (any orientation)."""
     cur2d = plane.slice2d(seg.data, cursor)
-    new_slice2d = new_slice2d.astype(np.uint16, copy=False)
+    from .validation import validated_labels
+    new_slice2d = validated_labels(np.asarray(new_slice2d)[:, :, None])[:, :, 0]
     diff = cur2d != new_slice2d
     if not diff.any():
         return None
@@ -169,7 +207,5 @@ def apply_plane_slice(seg: Segmentation, plane, cursor, new_slice2d: np.ndarray,
     flatv = seg.data.reshape(-1)
     old = flatv[flat].copy()
     new = new_slice2d[vv, hh].astype(np.uint16)
-    flatv[flat] = new
     slices = np.unique(kk).tolist()
-    seg.mark_edited(slices)
     return EditCommand(flat.astype(np.int64), old, new, slices, description)

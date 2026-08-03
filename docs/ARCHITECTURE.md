@@ -87,7 +87,7 @@ sequenceDiagram
   UI-->>R: coalesced overlay refresh
   UI->>A: dirty/revision notification
   A->>D: atomic labels.npy then meta.json
-  R->>UI: Save corrected copy
+  R->>UI: Save current path or Save As
   UI->>D: temporary NIfTI + atomic replace
 ```
 
@@ -103,8 +103,13 @@ actual builds are synchronous.
 ## Recommended incremental target
 
 Keep the current core/UI separation; do not rewrite. Add (1) validated `ImageGeometry` and
-`LabelVolume` input contracts, (2) `CaseDocument` owning immutable image/baseline, editable
+`LabelVolume` input contracts, (2) `CaseDocument` owning the reference image, optional comparison layers, editable
 layers, provenance and lifecycle, (3) transactional edit/compound-command services, and
 (4) revision-aware background task services. `MainWindow` should coordinate these services,
 not own persistence and computation details. Workers return results tagged with document and
 revision; stale results are discarded on the UI thread.
+
+
+## Product scope clarification (Round 1A)
+
+The target is a general-purpose segmentation workstation: a user may load and edit an existing mask or create a blank mask and segment manually. AI QC is one important workflow. Organ and cyst files are independent and opened one at a time. Standard Save writes the current segmentation path; Save As selects a path/format, and an explicit confirmed overwrite is valid. Comparison baselines and provenance sidecars may be optional future features, never mandatory foundations.

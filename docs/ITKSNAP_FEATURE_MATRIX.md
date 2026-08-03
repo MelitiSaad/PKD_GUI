@@ -42,7 +42,7 @@ clinically validated.
 | Threshold/edge preprocessing | P3 | snake preprocessing pipelines | Optional local correction assist, not primary workflow |
 | Region competition/active contours/snakes | P3/LIC | LevelSet/Snake mode models/renderers | Only after user research; independent algorithm/library review |
 | ROI selection/evolution controls | P3 | Snake ROI interaction and control models | Task-focused local ROI if semi-automatic corrections are added |
-| AI/distributed segmentation | D/L | distributed segmentation infrastructure | AI stays external; import immutable baseline and provenance |
+| AI/distributed segmentation | D/L | distributed segmentation infrastructure | AI stays external; load its output as a normal editable segmentation; optional comparison may come later |
 | Keyboard shortcuts/customization | V/I | extensive actions/preferences | Conflict detection, searchable command palette, QC-first defaults |
 | Preferences | I/P2 | default behavior/appearance settings | Versioned minimal preferences, institutional policy locks |
 | CLI/batch | P2 | command-line parser and utilities | Validate/measure/export/review-report commands, never implicit overwrite |

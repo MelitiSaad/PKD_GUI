@@ -87,8 +87,11 @@ def test_history_byte_cap():
 # ---------------------------------------------------------------- segops
 def test_flood_fill():
     seg = make_seg()
-    cmd = segops.flood_fill(seg, 3, 10, 10, 4)        # inside the label-1 square
+    from pkdqc.core.label_policy import LabelProtectionPolicy, DrawOver
+    cmd = segops.flood_fill(seg, 3, 10, 10, 4,
+                            policy=LabelProtectionPolicy(DrawOver.ALL_PERMITTED))
     assert cmd is not None
+    History(seg).push(cmd)
     assert int((seg.data[:, :, 3] == 4).sum()) == 64  # whole square recolored
 
 
@@ -113,10 +116,10 @@ def test_segmentation_layers_keep_independent_editing_state():
 def test_grow_and_shrink_3d():
     seg = make_seg()
     before = int((seg.data == 1).sum())
-    segops.grow(seg, 1, iterations=1, in_3d=True)
+    History(seg).push(segops.grow(seg, 1, iterations=1, in_3d=True))
     assert int((seg.data == 1).sum()) > before
     grown = int((seg.data == 1).sum())
-    segops.shrink(seg, 1, iterations=1, in_3d=True)
+    History(seg).push(segops.shrink(seg, 1, iterations=1, in_3d=True))
     assert int((seg.data == 1).sum()) < grown
 
 
@@ -126,6 +129,7 @@ def test_remove_islands():
     seg.data[30, 30, 3] = 1                            # another
     cmd = segops.remove_islands(seg, 1, min_size=10, in_3d=False, z=3)
     assert cmd is not None
+    History(seg).push(cmd)
     assert seg.data[0, 0, 3] == 0 and seg.data[30, 30, 3] == 0
     assert int((seg.data[8:16, 8:16, 3] == 1).sum()) == 64  # big blob kept
 
@@ -136,6 +140,7 @@ def test_fill_holes():
     seg.data[14:16, 14:16, 1] = 0                      # punch a hole
     cmd = segops.fill_holes(seg, 1, in_3d=False, z=1)
     assert cmd is not None
+    History(seg).push(cmd)
     assert int((seg.data[14:16, 14:16, 1] == 1).sum()) == 4
 
 
@@ -146,6 +151,7 @@ def test_interpolate_between():
     assert int((seg.data[:, :, 4] == 1).sum()) == 0    # empty in between
     cmd = segops.interpolate_between(seg, 1, 2, 7)
     assert cmd is not None
+    History(seg).push(cmd)
     assert int((seg.data[:, :, 4] == 1).sum()) > 0     # gap filled
 
 
@@ -264,8 +270,11 @@ def test_flood_fill_plane():
     cursor = [8, 10, 9]
     sl = plane.slice2d(seg.data, cursor)
     vs, hs = np.nonzero(sl == 3)
-    cmd = segops.flood_fill_plane(seg, plane, cursor, int(vs[0]), int(hs[0]), 5)
+    from pkdqc.core.label_policy import LabelProtectionPolicy, DrawOver
+    cmd = segops.flood_fill_plane(seg, plane, cursor, int(vs[0]), int(hs[0]), 5,
+                                  policy=LabelProtectionPolicy(DrawOver.ALL_PERMITTED))
     assert cmd is not None
+    History(seg).push(cmd)
     assert int((seg.data == 5).sum()) == 70
     assert int((seg.data == 3).sum()) == 0
 
@@ -294,6 +303,7 @@ def test_lasso_rasterization_and_plane_add_remove_undo():
     hist.redo()
     assert int((seg.data == 2).sum()) == added
 
+    seg.active_id = 2
     remove = segops.apply_lasso_plane(seg, plane, cursor, vertices, 0)
     assert remove is not None
     hist.push(remove)
@@ -304,6 +314,7 @@ def test_lasso_rasterization_and_plane_add_remove_undo():
     seg.data[5, 5, 2] = 8
     protected_remove = segops.apply_lasso_plane(seg, plane, cursor, vertices, 0, remove_label=2)
     assert protected_remove is not None
+    hist.push(protected_remove)
     assert seg.data[5, 5, 2] == 8  # remove affects only the active label
 
 
@@ -318,6 +329,7 @@ def test_lasso_protect_labels_and_coronal_geometry():
     vertices = [(3, 3), (3, 9), (9, 9), (9, 3)]
     cmd = segops.apply_lasso_plane(seg, plane, cursor, vertices, 2, protect_existing=True)
     assert cmd is not None
+    History(seg).push(cmd)
     assert seg.data[5, 6, 5] == 9  # never overwrite a protected label
     assert seg.data[4, 6, 4] == 2  # plane mapping writes X,Y,Z, not axial-only
     assert np.count_nonzero(seg.data[:, 6, :] == 2) > 0
@@ -333,6 +345,7 @@ def test_freehand_lasso_contour_and_sagittal_mapping():
     assert mask[6, 6] and not mask[2, 2]
     cmd = segops.apply_lasso_plane(seg, PLANES[SAGITTAL], [7, 7, 7], contour, 4)
     assert cmd is not None
+    History(seg).push(cmd)
     assert np.count_nonzero(seg.data[7, :, :] == 4) == int(mask.sum())
 
 
@@ -383,7 +396,7 @@ def test_protected_paint_only_targets_background_or_same_label():
     labels = np.array([0, 1, 2, 1], dtype=np.uint16)
     assert np.array_equal(paintable_mask(labels, 1, True), [True, True, False, True])
     assert np.array_equal(paintable_mask(labels, 1, False), [True, True, True, True])
-    assert np.array_equal(paintable_mask(labels, 0, True), [True, True, True, True])
+    assert np.array_equal(paintable_mask(labels, 0, True), [False, True, True, True])
 
 
 def test_main_window_references_only_registered_actions():

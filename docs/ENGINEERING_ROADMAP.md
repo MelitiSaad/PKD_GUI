@@ -5,10 +5,10 @@ Effort: S (days), M (1–3 weeks), L (1–2 months), XL (multi-quarter), subject
 | Priority / item | Benefit and approach | Dependencies / risks / effort | Acceptance criteria and tests | Likely subsystems |
 |---|---|---|---|---|
 | **P0 Geometry contract + DICOM series selector** | Prevent wrong anatomy/orientation; immutable `ImageGeometry`, UID grouping, IOP/IPP affine, enhanced multiframe | De-identified fixtures, pydicom handlers; vendor variance; **L** | Oblique/reversed/mixed/gapped series match reference world coordinates; visible axis markers; unit+integration+phantom tests | `core/io`, `volume`, new geometry/selector UI |
-| **P0 Strict label validation/dtype policy** | Block silent corruption; validate finite integral range before conversion | Decide uint16 vs uint32; interoperability; **S** | malformed inputs rejected with counts; max label roundtrip exact | `io`, `segmentation`, `labels`, tests |
-| **P0 Safe case lifecycle and provenance save** | Eliminate recovery/original overwrite loss; `CaseDocument`, Save/Discard/Cancel, corrected-copy default | Product filename/sidecar policy; **M** | every dirty close/switch branch tested; original hash unchanged; recovery retained until disposition | `main_window`, `session`, `io` |
+| **P0 Strict label validation/dtype policy — completed Round 1A** | Block silent corruption; validate finite integral range before conversion | Decide uint16 vs uint32; interoperability; **S** | malformed inputs rejected with counts; max label roundtrip exact | `io`, `segmentation`, `labels`, tests |
+| **P0 Safe case lifecycle and provenance save** | Prevent accidental data loss; `CaseDocument`, normal Save/current path, Save As/user path, and Save/Discard/Cancel | Product filename/sidecar policy; **M** | every dirty close/switch and overwrite-confirmation branch tested; explicit overwrite permitted; recovery retained until disposition | `main_window`, `session`, `io` |
 | **P0 Recovery v2 + transactional edits** | Trustworthy rollback/restart; checksummed manifest and rollback-capable edit transaction | schema migration, storage; **M** | fault injection at write/mutation phases; source affine/hash verification; no false “unchanged” claim | `session`, commands/history/errors |
-| **P0 Multi-label safe operations** | Prevent organ overwrite; one draw-over policy used by brush/fill/morph/interpolation | Product defaults; **M** | conflict preview; other labels byte-identical under protect mode | `segops`, tools, command model |
+| **P0 Multi-label safe operations — completed Round 1A** | Prevent organ overwrite; one draw-over policy used by brush/fill/morph/interpolation | Product defaults; **M** | conflict preview; other labels byte-identical under protect mode | `segops`, tools, command model |
 | **P1 Baseline/layer wiring and label locks/isolation** | Direct AI-vs-corrected comparison and safe switching | P0 document model; **M** | hold-to-compare, lock enforcement for every operation, independent undo/session | `layers`, renderer, label panel |
 | **P1 Organ QC navigator** | Finds gaps/islands quickly; per-label slice/flag index | background service; thresholds; **M** | <250 ms navigation, correct synthetic flag fixtures, keyboard-only path | new review core/dock |
 | **P1 Cyst region review** | Makes hundreds of regions tractable; revisioned CC index, queue, focus/delete/review state | baseline/layers, worker framework; identity remap; **L** | workflow/latency targets, exact delete undo, persisted progress | review/component service, UI, session |
@@ -30,7 +30,7 @@ Effort: S (days), M (1–3 weeks), L (1–2 months), XL (multi-quarter), subject
 delivers in small pull requests: validation/dtype tests; geometry model and NIfTI contract;
 DICOM grouping/affine/selector; safe document close/save/provenance; recovery v2; then shared
 multi-label edit policy. Exit gate: known-world phantom proves L/R and all three edits, malformed
-labels are rejected, original AI files cannot be overwritten without a strong explicit action,
+labels are rejected, Save and Save As preserve user choice and require normal confirmation for an existing destination,
 save/reload is byte-equivalent in voxel labels and world geometry, and crash fault injection
 recovers the last committed revision. Do not begin cyst UX before this gate.
 
@@ -40,9 +40,14 @@ recovers the last committed revision. Do not begin cyst UX before this gate.
 2. Supported input/export formats, modalities, uint16 versus uint32 maximum label contract.
 3. Radiological/neurological display convention and required on-screen orientation markers.
 4. Whether DICOM is production-required now or must be disabled until validated.
-5. Corrected-file naming, sidecar/provenance, original-overwrite and retention policies.
+5. Supported Save/Save As formats and platform overwrite-confirmation behavior (no forced suffix or mandatory sidecar).
 6. Whether organs and cysts are separate files/layers by default and their authoritative IDs.
 7. Connectivity (6/18/26), tiny-region thresholds, and whether per-cyst identity is ever clinical.
 8. Autosave encryption/retention/location and PHI-safe logging requirements.
 9. Target workstation/case sizes and representative de-identified validation corpus access.
 10. Regulatory intended use, deployment owner, code-signing/SBOM/security requirements.
+
+
+## Round 1A completion
+
+Round 1A completes strict pre-conversion `uint16` validation, rollback-capable command/history transactions, exact live-stroke rollback, and a shared label-protection policy used by brush, threshold brush, erase, fill, lasso, morphology, cleanup, and interpolation. Focused regression tests prove malformed input rejection, history preservation under injected failures, exact three-plane undo/redo, and protected-label behavior. DICOM, recovery v2, Save/Save As lifecycle, navigation, background processing, and advanced parity remain deliberately untouched.
