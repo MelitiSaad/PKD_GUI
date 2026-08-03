@@ -195,12 +195,24 @@ def save_segmentation(seg: Segmentation, image: ImageVolume, path: str) -> None:
     """Write the label volume as NIfTI using the image's affine (atomic)."""
     import nibabel as nib
 
+    if not path or not _is_nifti(path):
+        raise ValueError("Unsupported segmentation format. Choose a .nii or .nii.gz file.")
+    parent = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(parent):
+        raise OSError(f"Destination folder does not exist: {parent}")
     if path.lower().endswith(".nii.gz"):
         tmp = path[:-7] + ".saving.nii.gz"      # keep a valid extension for nibabel
-    elif path.lower().endswith(".nii"):
-        tmp = path[:-4] + ".saving.nii"
     else:
-        path = path + ".nii.gz"
-        tmp = path[:-7] + ".saving.nii.gz"
-    nib.save(nib.Nifti1Image(seg.data.astype(np.uint16), image.affine), tmp)
-    os.replace(tmp, path)
+        tmp = path[:-4] + ".saving.nii"
+    try:
+        out = nib.Nifti1Image(seg.data.astype(np.uint16, copy=False), image.affine)
+        out.header.set_zooms(tuple(float(v) for v in image.spacing))
+        nib.save(out, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
