@@ -67,3 +67,6 @@ state, and remains visibly unsaved until the user explicitly saves or discards i
 
 ## Round 1G autosave retirement rule
 Manual Save/Save As, Discard, case replacement, new segmentation, and clean close retire the active recovery session before results from an already-running autosave are allowed to apply. Workers still use immutable snapshots and transactional generation directories; stale or cancelled autosave results must not recreate valid recovery data after the session is retired. Cancelled dialogs and failed manual saves preserve dirty recovery data.
+
+## Round 1H layer scope
+A case has one reference image and an ordered collection of stable-ID segmentation layers. Arrays and numeric label IDs remain layer-local and are never flattened or offset. Only the active layer supplies editing, history, Region Review, volumetry, edited slices, and 3D context; 2D rendering composites independently generated slices for all effectively visible layers. Background and recovery work must match case ID, layer ID, and source revision before application. Recovery remains per-layer; full workspace layout persistence is not implemented.
