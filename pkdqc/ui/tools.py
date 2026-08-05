@@ -45,6 +45,7 @@ class ToolController(QObject):
         # neighbouring object. Experts can disable this for reassignment work.
         self.protect_existing = True
         self.island_min = 20
+        self.background_runner = None
         self._rec: Optional[StrokeRecorder] = None
         self._last_vh: Optional[Tuple[int, int]] = None
         self._paint_val: int = 0
@@ -258,18 +259,24 @@ class ToolController(QObject):
             self.ortho.notify_edit()
             self.edited.emit()
 
+    def _background_or_run(self, op_name, sync_compute):
+        if self.background_runner is not None and self.seg is not None:
+            self.background_runner(op_name, int(self.seg.active_id), self.morph_3d, self.ortho.z, self.island_min)
+        else:
+            self._run(sync_compute())
+
     def apply_grow(self) -> None:
-        self._run(segops.grow(self.seg, int(self.seg.active_id), 1, self.morph_3d, self.ortho.z))
+        self._background_or_run("grow", lambda: segops.grow(self.seg, int(self.seg.active_id), 1, self.morph_3d, self.ortho.z))
 
     def apply_shrink(self) -> None:
-        self._run(segops.shrink(self.seg, int(self.seg.active_id), 1, self.morph_3d, self.ortho.z))
+        self._background_or_run("shrink", lambda: segops.shrink(self.seg, int(self.seg.active_id), 1, self.morph_3d, self.ortho.z))
 
     def apply_remove_islands(self) -> None:
-        self._run(segops.remove_islands(self.seg, int(self.seg.active_id),
+        self._background_or_run("remove islands", lambda: segops.remove_islands(self.seg, int(self.seg.active_id),
                                         self.island_min, self.morph_3d, self.ortho.z))
 
     def apply_fill_holes(self) -> None:
-        self._run(segops.fill_holes(self.seg, int(self.seg.active_id), self.morph_3d, self.ortho.z))
+        self._background_or_run("fill holes", lambda: segops.fill_holes(self.seg, int(self.seg.active_id), self.morph_3d, self.ortho.z))
 
     def apply_interpolate(self) -> None:
         if self.seg is None:

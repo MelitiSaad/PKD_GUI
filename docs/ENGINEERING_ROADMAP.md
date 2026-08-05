@@ -13,7 +13,7 @@ Effort: S (days), M (1–3 weeks), L (1–2 months), XL (multi-quarter), subject
 | **P1 Baseline/layer wiring and label locks/isolation** | Direct AI-vs-corrected comparison and safe switching | P0 document model; **M** | hold-to-compare, lock enforcement for every operation, independent undo/session | `layers`, renderer, label panel |
 | **P1 Organ QC navigator** | Finds gaps/islands quickly; per-label slice/flag index | background service; thresholds; **M** | <250 ms navigation, correct synthetic flag fixtures, keyboard-only path | new review core/dock |
 | **P1 Cyst region review** | Makes hundreds of regions tractable; revisioned CC index, queue, focus/delete/review state | baseline/layers, worker framework; identity remap; **L** | workflow/latency targets, exact delete undo, persisted progress | review/component service, UI, session |
-| **P1 Background work framework** | No UI freezes; cancellable revision-tagged volumetry, autosave snapshot, morphology, mesh | safe snapshots/memory budget; **L** | stale results rejected; input latency maintained under jobs; cancellation tests | task service, session, volumetry, 3D |
+| **P1 Background work framework — completed Round 1E** | No UI freezes; cancellable revision-tagged volumetry, autosave snapshot, morphology, mesh | safe snapshots/memory budget; **L** | stale results rejected; input latency maintained under jobs; cancellation tests | `core/background`, session, volumetry, cleanup, 3D hooks |
 | **P1 Safe cleanup/interpolation UX** | Fast corrections without hidden bulk edits; preview + physical parameters + compound undo | transaction and policy services; **M** | one undo per action; explicit endpoints; changed/conflict counts exact | segops/tools/dialogs |
 | **P1 Professional deployment baseline** | Repeatable hospital evaluation | license decision, supported OS, certificates; **L** | pinned lock/SBOM, CI artifact, signed installer verification, clean-machine test | dependencies/spec/CI/installer |
 | **P2 Statistics/CSV/review report** | Reproducible measurement output | provenance schema; **M** | determinant volume, finite stats, locale-stable CSV golden tests | volumetry/report UI/CLI |
@@ -79,3 +79,19 @@ Round 1C introduces the NIfTI `ImageGeometry` contract, determinant-based physic
 ### Round 1D completion
 
 Round 1D replaces unsafe DICOM directory stacking with PHI-safe discovery candidates, explicit series selection when multiple valid volumes exist, LPS-to-RAS geometry construction from IOP/IPP/PixelSpacing, projected-position slice ordering, strict inconsistency rejection, limited regular Enhanced CT/MR multiframe support, DICOM-source Recovery v2 identity, and NIfTI-only segmentation import. DICOM SEG, gantry-tilt correction, registration/resampling, and arbitrary multidimensional DICOM remain out of scope.
+
+### Round 1E completion
+
+Round 1E adds `BackgroundTaskService` with immutable revision snapshots, document/revision tags, bounded latest-only coalescing for volumetry/autosave/mesh-style jobs, cancellation tokens, stale-result rejection, background autosave checkpointing, and one-command UI-thread application for destructive cleanup results. The next milestone can safely build high-volume cyst connected-component indexing and review navigation on this foundation.
+
+### Round 1F completion
+
+Round 1F adds high-volume Region Review for one-color, individually labelled, and mixed cyst
+segmentations without imposing a cyst-specific file model. It introduces a Qt-free region index,
+connected/label/mixed grouping modes, included-label volume totals, explicit 6/18/26 connectivity,
+fingerprint-based review-state retention, background indexing with stale-result rejection,
+keyboard-first review actions, exact component deletion, explicit whole-label deletion, atomic
+PHI-safe review-progress persistence, and deterministic performance benchmarks. Known limitations
+remain: same-label touching regions are one component, local rebuild currently falls back to a full
+coalesced rebuild when split/merge correctness cannot be proven, and DICOM SEG/export remains out
+of scope.

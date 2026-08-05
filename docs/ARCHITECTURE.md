@@ -129,3 +129,20 @@ The target is a general-purpose segmentation workstation: a user may load and ed
 ## Round 1D DICOM source images
 
 DICOM loading now uses `core.dicom` discovery candidates instead of directory-wide stacking. Classic slices are sorted by position projected onto the slice normal, Enhanced CT/MR multiframe is accepted only when functional groups describe one regular scalar volume, and Recovery v2 source identity stores a PHI-safe aggregate of technical identifiers, file fingerprints, loaded shape, affine, and spacing. Segmentation import remains NIfTI-only; DICOM SEG is rejected with a clear unsupported message. See `docs/DICOM_GEOMETRY.md`.
+
+## Round 1E background processing
+
+`BackgroundTaskService` tags work by document id, revision, task type, and parameters. Workers operate on read-only snapshots and return new values; `MainWindow` drains results on a Qt timer and applies only non-stale results. Volumetry and autosave use latest-only coalescing, cleanup operations apply one undoable command only when the source revision still matches, and case replacement/shutdown cancel pending work. See `docs/BACKGROUND_PROCESSING.md`.
+
+## Round 1F Region Review
+
+Region Review is implemented as a review/navigation layer over ordinary segmentation labels.
+`core.regions` builds a Qt-independent connected-component index from immutable revision
+snapshots and records per-component and per-label measurements without changing numeric label
+values. The index supports connected-region, label/color, and label-with-components grouping,
+6/18/26-neighbour connectivity, determinant-based volumes, stable fingerprints, review-state
+remapping, exact component deletion, and explicit whole-label deletion. `MainWindow` submits
+index builds through `BackgroundTaskService` and applies only non-stale results; navigation and
+isolation do not enter undo history or modify voxel data. Review progress is stored atomically
+under the application data directory with PHI-safe technical identity hashes rather than NIfTI
+sidecars. See `docs/REGION_REVIEW.md`.
