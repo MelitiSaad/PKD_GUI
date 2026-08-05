@@ -13,6 +13,7 @@ from typing import Tuple
 
 import numpy as np
 
+from . import dicom
 from .geometry import ImageGeometry, validate_nifti_header
 from .labels import LabelTable
 from .segmentation import Segmentation
@@ -146,12 +147,12 @@ def _load_dicom_series(path: str):
 
 
 # --------------------------------------------------------------------- API
-def load_image(path: str) -> ImageVolume:
+def load_image(path: str, dicom_selector=None, dicom_series_uid: str | None = None, source_identity: dict | None = None) -> ImageVolume:
     try:
         if _is_nifti(path):
             data, spacing, affine, geometry = _load_nifti(path, as_int=False)
         else:
-            data, spacing, affine, geometry = _load_dicom_series(path)
+            return dicom.load_series(path, selector=dicom_selector, series_uid=dicom_series_uid, source_identity=source_identity)
         if data.ndim != 3:
             raise LoadError(
                 f"Image has shape {data.shape}; a single 3D volume is required. "
@@ -172,12 +173,13 @@ def load_image(path: str) -> ImageVolume:
 
 def load_segmentation(path: str, ref_shape: Tuple[int, int, int],
                       ref_affine: np.ndarray | None = None) -> Segmentation:
+    if not _is_nifti(path):
+        raise LoadError("Segmentation loading supports .nii and .nii.gz only; DICOM SEG is not currently supported.")
     try:
         if _is_nifti(path):
             data, _spacing, affine, _geometry = _load_nifti(path, as_int=True)
         else:
-            arr, _spacing, affine, _geometry = _load_dicom_series(path)
-            data = validated_labels(arr)
+            raise LoadError("Segmentation loading supports .nii and .nii.gz only; DICOM SEG is not currently supported.")
     except LoadError:
         raise
     except SegmentationValidationError as exc:

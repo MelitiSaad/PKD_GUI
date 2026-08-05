@@ -36,7 +36,7 @@ from ..core.segmentation import Segmentation
 from ..core.session import Session
 from ..errors import gui_guard
 from .contrast import ContrastDialog
-from .dialogs import ShortcutsDialog, about_html
+from .dialogs import DicomSeriesDialog, ShortcutsDialog, about_html
 from .label_panel import LabelPanel
 from .ortho import OrthoView
 from .tools import ToolController
@@ -528,7 +528,7 @@ class MainWindow(QMainWindow):
         path = self._pick_open("Open image", "Images (*.nii *.nii.gz *.dcm);;All files (*)")
         if not path:
             return
-        image = io.load_image(path)
+        image = io.load_image(path, dicom_selector=self._select_dicom_series)
         if not self._guard_unsaved():
             return
         self._set_case(image, Segmentation.empty_like(image.shape), None)
@@ -623,6 +623,13 @@ class MainWindow(QMainWindow):
     def _discard_checkpoint(self):
         if self.session is not None:
             self.session.mark_clean(remove=True)
+
+
+    def _select_dicom_series(self, candidates):
+        dlg = DicomSeriesDialog(candidates, self)
+        if dlg.exec() == DicomSeriesDialog.DialogCode.Accepted:
+            return dlg.chosen
+        return None
 
     def _pick_open(self, title, filt):
         start = self.settings.value(config.SK_LAST_DIR, "")
@@ -743,7 +750,7 @@ class MainWindow(QMainWindow):
             tip += (f"\nImage geometry: shape {g.shape}, spacing "
                     f"{tuple(round(v, 4) for v in g.spacing)} mm, orientation {g.orientation}, "
                     f"voxel volume {g.voxel_volume_mm3:.6g} mm³, status {status}, "
-                    "display convention neurological/RAS+")
+                    "display convention radiological/RAS+")
         self.lbl_document.setToolTip(tip)
         self.setWindowTitle(f"{'*' if dirty else ''}{config.APP_NAME}")
 

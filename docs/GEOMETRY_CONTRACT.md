@@ -21,7 +21,7 @@ not rewrite the affine.
 
 ## Display convention and markers
 
-Round 1C uses one explicit neurological/RAS+ display convention.  Existing plane
+Round 1C uses one explicit radiological/RAS+ display convention.  Existing plane
 transforms remain bijective: each displayed pixel maps back to exactly one source
 voxel.  Patient markers are derived from the affine columns after the plane's
 actual transpose/flip mapping:
@@ -30,7 +30,7 @@ actual transpose/flip mapping:
 - Coronal: in-plane i/k axes.
 - Sagittal: in-plane j/k axes.
 
-The marker code is isolated so radiological display can be added later without
+The marker code is isolated so neurological display can be added later without
 changing voxel/world geometry.
 
 ## Oblique and shear policy

@@ -47,6 +47,8 @@ def _sha256_file(path: Path) -> str:
 def source_identity(image_or_path, shape=None, affine=None, spacing=None) -> dict:
     """Calculate a stable source identity once when a case/session is created."""
     if isinstance(image_or_path, ImageVolume):
+        if getattr(image_or_path, "source_identity", None):
+            return dict(image_or_path.source_identity)
         path = image_or_path.path
         shape, affine, spacing = image_or_path.shape, image_or_path.affine, image_or_path.spacing
     else:
@@ -259,10 +261,19 @@ def _validate_generation(path: Path, expected_session: str) -> tuple[dict, np.nd
         raise RecoveryError("source affine is inconsistent")
     if not np.allclose(source.get("spacing"), manifest["voxel_spacing"]):
         raise RecoveryError("source spacing is inconsistent")
-    current = source_identity(source["locator"], source["shape"], source["affine"], source["spacing"])
-    for key in ("size", "mtime_ns", "sha256", "shape"):
-        if current[key] != source.get(key):
+    if source.get("type") == "dicom-series":
+        from . import dicom
+        try:
+            img = dicom.load_series(source["locator"], source_identity=source)
+        except Exception as exc:
+            raise RecoveryError("DICOM source identity mismatch") from exc
+        if list(img.shape) != source.get("shape"):
             raise RecoveryError("source image identity mismatch")
+    else:
+        current = source_identity(source["locator"], source["shape"], source["affine"], source["spacing"])
+        for key in ("size", "mtime_ns", "sha256", "shape"):
+            if current[key] != source.get(key):
+                raise RecoveryError("source image identity mismatch")
     return manifest, data
 
 
@@ -324,12 +335,23 @@ def load_recovered_segmentation(rec: Recoverable) -> Segmentation:
 def validate_recovery_image(rec: Recoverable, image: ImageVolume) -> None:
     """Verify the reopened image still has the checkpoint's loaded geometry."""
     manifest = json.loads(Path(rec.manifest_path).read_text(encoding="utf-8"))
+    source = manifest.get("source_image", {})
+    if source.get("type") == "dicom-series":
+        current = getattr(image, "source_identity", None)
+        if current is None or current.get("identity_sha256") != source.get("identity_sha256"):
+            raise RecoveryError("reopened DICOM source identity mismatch")
     if list(image.shape) != manifest["source_shape"]:
         raise RecoveryError("reopened source image shape mismatch")
     if not np.allclose(image.affine, manifest["source_affine"], rtol=1e-5, atol=1e-3):
         raise RecoveryError("reopened source image affine mismatch")
     if not np.allclose(image.spacing, manifest["voxel_spacing"], rtol=1e-6, atol=1e-6):
         raise RecoveryError("reopened source image spacing mismatch")
+
+
+def recovery_source_identity(rec: Recoverable) -> dict:
+    """Return PHI-safe source identity stored in a recovery manifest."""
+    manifest = json.loads(Path(rec.manifest_path).read_text(encoding="utf-8"))
+    return manifest.get("source_image", {})
 
 
 def discard(rec: Recoverable) -> None:

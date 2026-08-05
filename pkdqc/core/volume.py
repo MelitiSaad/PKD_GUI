@@ -24,6 +24,7 @@ class ImageVolume:
     affine: np.ndarray                   # 4x4, for saving derived volumes
     path: str = ""
     geometry: ImageGeometry | None = None
+    source_identity: dict | None = None
 
     def __post_init__(self):
         if self.data.ndim != 3:
