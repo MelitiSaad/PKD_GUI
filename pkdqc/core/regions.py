@@ -211,6 +211,14 @@ class RegionReviewState:
 
     def queue(self, index: RegionIndex) -> Tuple[RegionRecord, ...]:
         records = [r for r in index.records if r.label_id in index.included_labels]
+        grouping = GroupingMode(self.grouping_mode)
+        if grouping == GroupingMode.LABELS:
+            representatives = {}
+            for rec in sorted(records, key=lambda r: (-r.voxel_count, r.transient_id)):
+                representatives.setdefault(rec.label_id, rec)
+            records = [representatives[lid] for lid in sorted(representatives)]
+        elif grouping == GroupingMode.LABELS_WITH_COMPONENTS:
+            records = sorted(records, key=lambda r: (r.label_id, r.transient_id))
         mode = FilterMode(self.filter_mode)
         if mode == FilterMode.UNREVIEWED:
             records = [r for r in records if self.status_for(r) == ReviewStatus.UNREVIEWED.value]
@@ -301,20 +309,38 @@ def build_region_index(segmentation: np.ndarray, labels: LabelTable, geometry: I
     records: list[RegionRecord] = []
     summaries: dict[int, LabelRegionSummary] = {}
     transient = 1
+    foreground = data != 0
+    comp_all, ncomp_all = ndimage.label(foreground, structure=structure)
+    objects = ndimage.find_objects(comp_all)
+    per_label: dict[int, list[RegionRecord]] = {lid: [] for lid in present}
+    for comp_id, slc in enumerate(objects, start=1):
+        if slc is None:
+            continue
+        local_comp = comp_all[slc] == comp_id
+        vals = np.unique(data[slc][local_comp])
+        for lid_raw in vals:
+            lid = int(lid_raw)
+            if lid == 0:
+                continue
+            local = local_comp & (data[slc] == lid)
+            subcomp, nsub = ndimage.label(local, structure=structure)
+            base = np.array([a.start for a in slc], dtype=np.int64)
+            lab = labels.labels.get(lid)
+            name = lab.name if lab else f"Object {lid}"
+            color = tuple(lab.color) if lab else (255, 255, 255)
+            for sub_id in range(1, int(nsub) + 1):
+                coords = np.column_stack(np.nonzero(subcomp == sub_id)).astype(np.int64) + base
+                if coords.size == 0:
+                    continue
+                flat = np.ravel_multi_index(coords.T, data.shape).astype(np.int64)
+                record = _record_for_component(transient, sub_id, lid, name, color, flat.copy(), data.shape, geometry, review_state)
+                record.flat_indices.setflags(write=False)
+                records.append(record); per_label.setdefault(lid, []).append(record); transient += 1
     for lid in present:
         lab = labels.labels.get(lid)
         name = lab.name if lab else f"Object {lid}"
         color = tuple(lab.color) if lab else (255, 255, 255)
-        mask = data == lid
-        comp, ncomp = ndimage.label(mask, structure=structure)
-        label_records = []
-        for comp_id in range(1, int(ncomp) + 1):
-            flat = np.flatnonzero(comp.ravel() == comp_id).astype(np.int64, copy=False)
-            if flat.size == 0:
-                continue
-            record = _record_for_component(transient, comp_id, lid, name, color, flat.copy(), data.shape, geometry, review_state)
-            record.flat_indices.setflags(write=False)
-            records.append(record); label_records.append(record); transient += 1
+        label_records = per_label.get(lid, [])
         if label_records:
             mins = np.min([r.bbox[0] for r in label_records], axis=0).astype(int)
             maxs = np.max([r.bbox[1] for r in label_records], axis=0).astype(int)

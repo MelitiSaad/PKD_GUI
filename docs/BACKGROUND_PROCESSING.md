@@ -69,3 +69,6 @@ Snapshot capture is still a full segmentation copy. Large labels may therefore
 cause a measurable but bounded UI pause. 3D mesh computation is coalesced at the
 service layer, but VTK/PyVista object creation remains constrained by optional
 runtime availability and must stay on the render/UI thread.
+
+## Round 1G stale-result policy
+Background work is tagged with document id, revision, task type, and parameters. Case replacement changes the document id and cancels outstanding work, so results from the previous document are rejected. Autosave workers also check retired session ids before and after the transactional write path.

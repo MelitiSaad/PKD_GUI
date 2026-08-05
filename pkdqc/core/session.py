@@ -105,6 +105,12 @@ def _write_manifest(path: Path, manifest: dict, hook: FaultHook) -> None:
         stream.flush(); os.fsync(stream.fileno())
 
 
+def _generation_revision(path: Path) -> int:
+    try:
+        return int(json.loads((path / MANIFEST).read_text(encoding="utf-8")).get("revision", -1))
+    except Exception:
+        return -1
+
 def _noop(_phase: str) -> None:
     pass
 
@@ -182,7 +188,7 @@ class Session:
         self._fault("during_cleanup")
         valid = sorted((p for p in self.generations.iterdir()
                         if p.is_dir() and not p.name.startswith(".")),
-                       key=lambda p: p.stat().st_mtime_ns, reverse=True)
+                       key=lambda p: (_generation_revision(p), p.stat().st_mtime_ns), reverse=True)
         for old in valid[MAX_GENERATIONS:]:
             shutil.rmtree(old, ignore_errors=True)
 
@@ -299,7 +305,7 @@ def find_recoverable() -> List[Recoverable]:
             continue
         candidates = sorted((p for p in generations.iterdir()
                              if p.is_dir() and not p.name.startswith(".")),
-                            key=lambda p: p.stat().st_mtime_ns, reverse=True)
+                            key=lambda p: (_generation_revision(p), p.stat().st_mtime_ns), reverse=True)
         warning = None
         for generation in candidates:
             try:

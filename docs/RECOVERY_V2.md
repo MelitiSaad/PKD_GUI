@@ -64,3 +64,6 @@ it is retained and marked as legacy/manual-review-required, but never silently t
 Successful manual Save/Save As, explicit Discard, and clean close retire the session. Cancel
 leaves it intact. A recovered document restores its path, current and saved revisions, and dirty
 state, and remains visibly unsaved until the user explicitly saves or discards it.
+
+## Round 1G autosave retirement rule
+Manual Save/Save As, Discard, case replacement, new segmentation, and clean close retire the active recovery session before results from an already-running autosave are allowed to apply. Workers still use immutable snapshots and transactional generation directories; stale or cancelled autosave results must not recreate valid recovery data after the session is retired. Cancelled dialogs and failed manual saves preserve dirty recovery data.

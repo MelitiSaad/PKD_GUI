@@ -161,3 +161,6 @@ Manual QA checklist:
     its component/voxel preview.
 11. Save, close/reopen the case, and confirm numeric labels persist and review
     progress resumes when identity matches.
+
+## Round 1G integration notes
+Region Review organizes voxels that are already present in the segmentation; it does not detect cysts or create automatic cyst segmentations. It supports shared-label disconnected regions, one numeric label per cyst, and mixed conventions. Same-label touching cysts are one connected component under the selected connectivity. Grouping modes now change the review queue: connected regions visits every component, labels/colors visits one representative per label, and labels-with-components orders components by label. Isolation is display-only and must not modify labels, history, dirty state, revision, or saved data. Custom label names and colours are not preserved by NIfTI alone unless the user manages metadata outside the NIfTI file.

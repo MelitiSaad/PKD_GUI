@@ -7,8 +7,8 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QKeySequenceEdit, QLabel,
-    QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QKeySequenceEdit, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .. import config
@@ -64,39 +64,61 @@ class RecoveryDialog(QDialog):
 
 
 class ShortcutsDialog(QDialog):
-    def __init__(self, actions: List[Tuple[str, str, QAction]], settings, parent=None):
+    def __init__(self, registry, actions: Dict[str, QAction], settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Keyboard shortcuts")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(640)
+        self._registry = registry
         self._actions = actions
         self._settings = settings
         self._editors: Dict[str, QKeySequenceEdit] = {}
+        self._rows: Dict[str, QWidget] = {}
 
         lay = QVBoxLayout(self)
-        for action_id, label, action in actions:
-            row = QHBoxLayout()
-            name = QLabel(label)
-            name.setMinimumWidth(180)
-            edit = QKeySequenceEdit(action.shortcut())
-            self._editors[action_id] = edit
-            row.addWidget(name)
-            row.addWidget(edit, 1)
-            lay.addLayout(row)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
+        top = QHBoxLayout()
+        self.search = QLineEdit(); self.search.setPlaceholderText("Search commands")
+        self.category = QComboBox(); self.category.addItem("All categories")
+        for cat in sorted({spec.category for spec in registry.values()}):
+            self.category.addItem(cat)
+        top.addWidget(self.search, 1); top.addWidget(self.category)
+        lay.addLayout(top)
+        for action_id, spec in sorted(registry.items(), key=lambda kv: (kv[1].category, kv[1].label)):
+            roww = QWidget(); row = QHBoxLayout(roww); row.setContentsMargins(0, 0, 0, 0)
+            name = QLabel(f"{spec.label}\n{spec.category}"); name.setMinimumWidth(240)
+            edit = QKeySequenceEdit(actions[action_id].shortcut())
+            clear = QPushButton("Clear"); clear.clicked.connect(lambda _=False, e=edit: e.clear())
+            self._editors[action_id] = edit; self._rows[action_id] = roww
+            row.addWidget(name); row.addWidget(edit, 1); row.addWidget(clear)
+            lay.addWidget(roww)
+        reset = QPushButton("Reset recommended defaults")
+        reset.clicked.connect(self._reset_defaults)
+        lay.addWidget(reset)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._save); buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
+        self.search.textChanged.connect(self._filter); self.category.currentTextChanged.connect(self._filter)
+
+    def _filter(self):
+        text = self.search.text().strip().lower(); cat = self.category.currentText()
+        for aid, spec in self._registry.items():
+            visible = (cat == "All categories" or spec.category == cat) and (not text or text in spec.label.lower() or text in aid.lower())
+            self._rows[aid].setVisible(visible)
+
+    def _reset_defaults(self) -> None:
+        for aid, spec in self._registry.items():
+            self._editors[aid].setKeySequence(QKeySequence(spec.default))
 
     def _save(self) -> None:
-        stored = {}
-        for action_id, _label, action in self._actions:
-            seq = self._editors[action_id].keySequence()
-            action.setShortcut(seq)
-            stored[action_id] = seq.toString()
+        stored = {aid: self._editors[aid].keySequence().toString() for aid in self._registry}
+        from ..core.shortcuts import shortcut_conflicts
+        conflicts = shortcut_conflicts(stored, self._registry)
+        if conflicts:
+            detail = "\n".join(f"{key}: " + ", ".join(self._registry[a].label for a in aids) for key, aids in conflicts.items())
+            QMessageBox.warning(self, "Shortcut conflict", "Resolve duplicate shortcuts before saving.\n" + detail)
+            return
         self._settings.setValue(config.SK_SHORTCUTS, stored)
+        for action_id, key in stored.items():
+            self._actions[action_id].setShortcut(QKeySequence(key))
         self.accept()
 
 

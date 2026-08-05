@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from .. import config, icons, theme
 from ..core import commands, io, segops
+from ..core.shortcuts import build_command_registry, migrate_shortcuts
 from ..core.regions import (
     DEFAULT_CONNECTIVITY, RegionReviewState, build_region_index,
     clear_review_progress, delete_label_checked, delete_region_checked,
@@ -81,41 +82,8 @@ OPERATIONS = [
     ("interpolate", "Interpolate slices", "interpolate", "I"),
 ]
 
-_SHORTCUTS = {
-    **{tid: (label, key) for tid, label, _ic, key in TOOLS},
-    **{oid: (label, key) for oid, label, _ic, key in OPERATIONS},
-    "undo": ("Undo", "Ctrl+Z"),
-    "redo": ("Redo", "Ctrl+Y"),
-    "open_image": ("Open image", "Ctrl+O"),
-    "load_seg": ("Load segmentation", "Ctrl+L"),
-    "save": ("Save segmentation", "Ctrl+S"),
-    "save_as": ("Save segmentation as…", "Ctrl+Shift+S"),
-    "new_seg": ("New segmentation", "Ctrl+N"),
-    "next_edited": ("Next edited slice", "."),
-    "prev_edited": ("Previous edited slice", ","),
-    "brush_minus": ("Smaller brush", "["),
-    "brush_plus": ("Larger brush", "]"),
-    "brush_threshold": ("Threshold brush", "T"),
-    "brush_protect": ("Protect labels", ""),
-    "reset_view": ("Reset zoom", "Ctrl+0"),
-    "update_3d": ("Update 3D", "F5"),
-    "region_toggle": ("Region Review", "R"),
-    "region_next": ("Next region", "N"),
-    "region_prev": ("Previous region", "P"),
-    "region_reviewed": ("Mark reviewed and advance", "Space"),
-    "region_unreviewed": ("Mark unreviewed", "Shift+Space"),
-    "region_delete": ("Delete current connected region", "Delete"),
-    "region_isolate": ("Isolate current region", "Q"),
-    "contrast": ("Contrast\u2026", "C"),
-    "remove_unused": ("Remove unused objects", "Ctrl+Shift+R"),
-    "continuous_3d": ("Continuous 3D update", ""),
-    "axes_3d": ("Show 3D axes", ""),
-    "layout_grid": ("2\u00d72", "1"),
-    "layout_axial": ("Axial", "2"),
-    "layout_coronal": ("Coronal", "3"),
-    "layout_sagittal": ("Sagittal", "4"),
-    "layout_3d": ("3D", "5"),
-}
+COMMANDS = build_command_registry(TOOLS, OPERATIONS)
+_SHORTCUTS = {aid: (spec.label, spec.default) for aid, spec in COMMANDS.items()}
 
 _LAYOUT_OF = {"layout_grid": "grid", "layout_axial": "axial", "layout_coronal": "coronal",
               "layout_sagittal": "sagittal", "layout_3d": "3d"}
@@ -139,6 +107,8 @@ class MainWindow(QMainWindow):
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
         self._enable_3d = enable_3d and volume_view.available()
+        self._case_id = uuid.uuid4().hex
+        self._retired_sessions: set[str] = set()
 
         self.act: dict[str, QAction] = {}
         self._make_actions()
@@ -203,6 +173,7 @@ class MainWindow(QMainWindow):
         self._mk("open_image", "open"); self._mk("load_seg", "layers"); self._mk("save", "save")
         self._mk("save_as", "save")
         self._mk("new_seg")
+        self._mk("quit")
         self._mk("next_edited", "next_edit"); self._mk("prev_edited", "prev_edit")
         self._mk("brush_minus"); self._mk("brush_plus")
         self._mk("reset_view", "reset_view"); self._mk("update_3d", "cube")
@@ -254,8 +225,7 @@ class MainWindow(QMainWindow):
         for aid in ("save", "save_as", "new_seg"):
             m_file.addAction(self.act[aid])
         m_file.addSeparator()
-        act_quit = QAction("Quit", self); act_quit.setShortcut(QKeySequence("Ctrl+Q"))
-        act_quit.triggered.connect(self.close); m_file.addAction(act_quit)
+        self.act["quit"].triggered.connect(self.close); m_file.addAction(self.act["quit"])
 
         m_edit = mb.addMenu("&Edit")
         m_edit.addAction(self.act["undo"]); m_edit.addAction(self.act["redo"])
@@ -451,11 +421,26 @@ class MainWindow(QMainWindow):
         self.region_panel.filterChanged.connect(self._region_set_filter)
 
     def _apply_shortcuts(self):
-        stored = self.settings.value(config.SK_SHORTCUTS, {}) or {}
-        for aid, (_label, default) in _SHORTCUTS.items():
-            key = stored.get(aid, default) if isinstance(stored, dict) else default
-            if key:
+        self._shortcut_assignments = migrate_shortcuts(self.settings.value(config.SK_SHORTCUTS, {}) or {}, COMMANDS)
+        for aid, key in self._shortcut_assignments.items():
+            if aid in self.act:
                 self.act[aid].setShortcut(QKeySequence(key))
+                self.act[aid].setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+                self._refresh_action_text(aid)
+
+    def _refresh_action_text(self, aid):
+        spec = COMMANDS[aid]
+        key = self.act[aid].shortcut().toString()
+        self.act[aid].setToolTip(spec.label + (f"  ({key})" if key else ""))
+
+    def _retire_session(self, remove=True):
+        self._autosave_timer.stop(); self._idle_timer.stop()
+        self.background.cancel_task_type("autosave")
+        session = self.session
+        if session is not None:
+            self._retired_sessions.add(session.id)
+            session.mark_clean(remove=remove)
+
 
     # ================================================================ tools
     @gui_guard
@@ -644,7 +629,7 @@ class MainWindow(QMainWindow):
             if self.session is not None:
                 self.session.seg_path = self.document.segmentation_path
                 # A successful user export leaves no unsaved work to recover.
-                self.session.mark_clean(remove=True)
+                self._retire_session(remove=True)
             self._sync_document_state()
             name = os.path.basename(self.document.segmentation_path or "segmentation")
             self._set_saved_state("saved", extra=f"to {name}")
@@ -691,8 +676,7 @@ class MainWindow(QMainWindow):
 
     def _discard_checkpoint(self):
         self.background.cancel_all()
-        if self.session is not None:
-            self.session.mark_clean(remove=True)
+        self._retire_session(remove=True)
 
 
     def _select_dicom_series(self, candidates):
@@ -711,8 +695,7 @@ class MainWindow(QMainWindow):
     # ================================================================ case
     def _set_case(self, image, seg, seg_path):
         self.background.cancel_all()
-        if self.session is not None:
-            self.session.mark_clean(remove=True)
+        self._retire_session(remove=True)
         self.image = image
         self.seg = seg
         self._case_id = uuid.uuid4().hex
@@ -878,7 +861,12 @@ class MainWindow(QMainWindow):
             seg = Segmentation(snap.data.copy())
             seg.revision = snap.revision
             seg.dirty = dirty
+            if session.id in self._retired_sessions or token.cancelled:
+                return snap.revision, False
             ok = session.save(seg, saved_revision=saved_revision, dirty=dirty)
+            if session.id in self._retired_sessions or token.cancelled:
+                session.mark_clean(remove=True)
+                return snap.revision, False
             return snap.revision, ok
         def apply(result):
             revision, ok = result
@@ -947,7 +935,7 @@ class MainWindow(QMainWindow):
             token.raise_if_cancelled()
             return build_region_index(
                 snap.data, labels, geometry, document_id=snap.document_id,
-                revision=snap.revision, connectivity=self.region_state.connectivity,
+                revision=snap.revision, connectivity=tag.params[0][1],
                 included_labels=included, review_state=review,
             )
         def apply(index):
@@ -1046,6 +1034,7 @@ class MainWindow(QMainWindow):
     def _region_toggle_isolation(self):
         if self.region_index is not None:
             self.region_state.toggle_isolation(self.region_index)
+            self.ortho.redraw_overlay()
             self.region_panel.set_index(self.region_index, self.region_state, stale=self._region_stale)
             self.statusBar().showMessage("Region isolation toggled (rendering only)", 2500)
 
@@ -1180,8 +1169,9 @@ class MainWindow(QMainWindow):
 
     @gui_guard
     def _edit_shortcuts(self):
-        rows = [(aid, _SHORTCUTS[aid][0], self.act[aid]) for aid in _SHORTCUTS if _SHORTCUTS[aid][1]]
-        ShortcutsDialog(rows, self.settings, self).exec()
+        dlg = ShortcutsDialog(COMMANDS, self.act, self.settings, self)
+        if dlg.exec():
+            self._apply_shortcuts()
 
     @gui_guard
     def _about(self):
@@ -1231,9 +1221,8 @@ class MainWindow(QMainWindow):
             return
         try:
             self.settings.setValue(config.SK_GEOMETRY, self.saveGeometry())
+            self._retire_session(remove=True)
             self.background.shutdown()
-            if self.session is not None:
-                self.session.mark_clean()
         except Exception:
             log.exception("Error during close")
         ev.accept()
