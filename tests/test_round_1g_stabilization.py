@@ -41,20 +41,26 @@ def test_shortcut_assign_clear_persist_conflict_reset_and_migration():
     assert {aid: key for aid, key in reset.items() if key} == RECOMMENDED_DEFAULTS
 
 
-def test_real_qaction_shortcuts_menu_tooltips_and_text_focus():
+def test_real_qaction_shortcuts_menu_tooltips_and_text_focus(qtbot):
     try:
         from PySide6.QtGui import QKeySequence
         from PySide6.QtWidgets import QApplication, QLineEdit
         from pkdqc.ui.main_window import MainWindow
     except ImportError as exc:
         pytest.skip(f"Qt unavailable: {exc}")
-    app = QApplication.instance() or QApplication([])
+    app = QApplication.instance()
+    assert app is not None
     win = MainWindow(enable_3d=False)
+    qtbot.addWidget(win)
+    assert win.lbl_tool.text() == "  Tool: Crosshair"
+    assert "Left-drag moves the crosshair" in win.lbl_hint.text()
     assert win.act["open_image"].shortcut() == QKeySequence("Ctrl+O")
     assert win.act["grow"].shortcut().isEmpty()
     win.act["grow"].setShortcut(QKeySequence("Alt+G")); win._refresh_action_text("grow")
     assert "Alt+G" in win.act["grow"].toolTip()
+    win.show()
     editor = QLineEdit(win); editor.show(); editor.setFocus()
+    qtbot.waitUntil(lambda: QApplication.focusWidget() is editor, timeout=1000)
     assert QApplication.focusWidget() is editor
 
 

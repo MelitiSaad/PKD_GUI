@@ -443,6 +443,11 @@ class MainWindow(QMainWindow):
 
 
     # ================================================================ tools
+    def _update_tool_feedback(self, name):
+        spec = COMMANDS[name]
+        self.lbl_tool.setText(f"  Tool: {spec.label}")
+        self.lbl_hint.setText(f"  {TOOL_HINTS.get(name, '')}")
+
     @gui_guard
     def _set_tool(self, name):
         self.controller.set_tool(name)
@@ -1221,6 +1226,10 @@ class MainWindow(QMainWindow):
             return
         try:
             self.settings.setValue(config.SK_GEOMETRY, self.saveGeometry())
+            self._autosave_timer.stop()
+            self._idle_timer.stop()
+            self._bg_timer.stop()
+            self._vol_timer.stop()
             self._retire_session(remove=True)
             self.background.shutdown()
         except Exception:
