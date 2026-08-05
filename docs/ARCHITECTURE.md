@@ -32,8 +32,9 @@ domain commands. `layers.py` sketches a future multi-segmentation model but is u
 
 1. `pkdqc.__main__` calls `app.run`; logging, QApplication, theme and exception hook are
    installed, then `MainWindow(enable_3d=True)` is shown.
-2. Startup scans per-user session directories and optionally reloads the source image and
-   `labels.npy`. Only array shape is checked before recovery.
+2. Startup scans Recovery v2 generation directories and offers only checkpoints whose schema,
+   data checksum, array contract, revisions, geometry, and source-file identity validate. A
+   corrupt newest generation falls back to an older valid one; legacy v1 is never trusted as v2.
 3. Opening NIfTI uses nibabel closest-canonical RAS+, float32 image data, zoom spacing and
    canonical affine. DICOM recursively reads every pixel-bearing file and stacks frames.
 4. Loading labels independently canonicalizes NIfTI, requires equal shape and approximately
@@ -45,8 +46,9 @@ domain commands. `layers.py` sketches a future multi-segmentation model but is u
 7. Brush/lasso mutate the contiguous segmentation immediately, then commit a flat-index
    old/new diff. Region operations create replacement arrays then derive a diff. History
    restores exact voxel values; refresh, dirty state, and autosave are controller signals.
-8. Periodic/idle/edit-count autosave synchronously writes the entire array to `.npy`, then
-   JSON metadata. Manual save writes a temporary NIfTI using the image affine and renames it.
+8. Periodic/idle/edit-count recovery synchronously commits an immutable generation containing
+   a checksummed `.npy` and versioned manifest. Manual save writes a temporary NIfTI using the
+   image affine and renames it, then retires recovery because no unsaved work remains.
 9. Close and case replacement pass through the shared dirty-document guard. Save must finish,
    Discard explicitly removes the checkpoint, and Cancel preserves the complete current case.
 

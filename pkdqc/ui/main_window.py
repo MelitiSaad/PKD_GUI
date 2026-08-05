@@ -576,6 +576,8 @@ class MainWindow(QMainWindow):
         if ok:
             if self.session is not None:
                 self.session.seg_path = self.document.segmentation_path
+                # A successful user export leaves no unsaved work to recover.
+                self.session.mark_clean(remove=True)
             self._sync_document_state()
             name = os.path.basename(self.document.segmentation_path or "segmentation")
             self._set_saved_state("saved", extra=f"to {name}")
@@ -645,7 +647,7 @@ class MainWindow(QMainWindow):
         self.panel.set_context(image, seg)
         self.slice_slider.setRange(0, image.n_slices - 1)
         self.slice_slider.setValue(self.ortho.z)
-        self.session = Session(image.path, seg_path)
+        self.session = Session(image, seg_path)
         self.session.begin()
         self._edits_since_save = 0
         self._contrast_dlg = None
@@ -656,10 +658,12 @@ class MainWindow(QMainWindow):
         self._sync_document_state()
         QTimer.singleShot(200, self.ortho.refresh_3d)  # one-time build; not on every edit
 
-    def load_recovered(self, image, seg, session_id):
-        self._set_case(image, seg, seg_path=None)
-        self.seg.dirty = True
-        self.document.saved_revision = None
+    def load_recovered(self, image, seg, recovery):
+        self._set_case(image, seg, seg_path=recovery.seg_path)
+        self.document.saved_revision = recovery.saved_revision
+        self.document.never_saved = recovery.seg_path is None
+        self.seg.dirty = recovery.dirty
+        self._sync_document_state()
         self._set_saved_state("unsaved", extra="recovered")
 
     # ================================================================ labels
@@ -706,7 +710,8 @@ class MainWindow(QMainWindow):
         if self.session is None or self.seg is None:
             return
         try:
-            if self.session.save(self.seg):
+            if self.session.save(self.seg, saved_revision=self.document.saved_revision,
+                                 dirty=self.document.dirty):
                 self._edits_since_save = 0
                 self._set_saved_state("autosaved")
         except Exception:

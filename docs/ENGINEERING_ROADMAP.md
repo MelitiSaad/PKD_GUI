@@ -7,7 +7,7 @@ Effort: S (days), M (1–3 weeks), L (1–2 months), XL (multi-quarter), subject
 | **P0 Geometry contract + DICOM series selector** | Prevent wrong anatomy/orientation; immutable `ImageGeometry`, UID grouping, IOP/IPP affine, enhanced multiframe | De-identified fixtures, pydicom handlers; vendor variance; **L** | Oblique/reversed/mixed/gapped series match reference world coordinates; visible axis markers; unit+integration+phantom tests | `core/io`, `volume`, new geometry/selector UI |
 | **P0 Strict label validation/dtype policy — completed Round 1A** | Block silent corruption; validate finite integral range before conversion | Decide uint16 vs uint32; interoperability; **S** | malformed inputs rejected with counts; max label roundtrip exact | `io`, `segmentation`, `labels`, tests |
 | **P0 Safe case lifecycle and standard segmentation save — completed Round 1B** | Prevent accidental data loss; document state, normal Save/current path, Save As/user path, and Save/Discard/Cancel | Product filename/sidecar policy; **M** | every dirty close/switch and overwrite-confirmation branch tested; explicit overwrite permitted; recovery retained until disposition | `document`, `main_window`, `session`, `io` |
-| **P0 Recovery v2 + transactional edits** | Trustworthy rollback/restart; checksummed manifest and rollback-capable edit transaction | schema migration, storage; **M** | fault injection at write/mutation phases; source affine/hash verification; no false “unchanged” claim | `session`, commands/history/errors |
+| **P0 Recovery v2 + transactional edits — completed** | Trustworthy rollback/restart; checksummed manifest and rollback-capable edit transaction | schema migration, storage; **M** | fault injection at write/mutation phases; source affine/hash verification; no false “unchanged” claim | `session`, commands/history/errors` |
 | **P0 Multi-label safe operations — completed Round 1A** | Prevent organ overwrite; one draw-over policy used by brush/fill/morph/interpolation | Product defaults; **M** | conflict preview; other labels byte-identical under protect mode | `segops`, tools, command model |
 | **P1 Baseline/layer wiring and label locks/isolation** | Direct AI-vs-corrected comparison and safe switching | P0 document model; **M** | hold-to-compare, lock enforcement for every operation, independent undo/session | `layers`, renderer, label panel |
 | **P1 Organ QC navigator** | Finds gaps/islands quickly; per-label slice/flag index | background service; thresholds; **M** | <250 ms navigation, correct synthetic flag fixtures, keyboard-only path | new review core/dock |
@@ -61,3 +61,12 @@ replacement route. NIfTI output remains atomic and rejects unsupported extension
 than silently changing a filename. Explicit discard retires the old recovery checkpoint;
 cancelled or failed saves leave the document and pending transition intact. Recovery v2,
 DICOM redesign, background work, and advanced navigation remain later milestones.
+
+## Recovery v2 completion
+
+Recovery v2 replaces paired mutable checkpoint files with immutable, checksummed generation
+directories and a versioned manifest. It validates source identity and geometry, falls back to
+a prior valid generation, marks corrupt and legacy data without silently deleting it, restores
+document revision/path/dirty state, and retires sessions only after explicit lifecycle outcomes.
+Fault injection covers every write, commit, and cleanup boundary. Background checkpointing and
+DICOM identity remain deliberately outside this milestone.
