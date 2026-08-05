@@ -182,6 +182,7 @@ class PlaneWidget(QWidget):
 
         self.img_item = pg.ImageItem()
         self.seg_item = pg.ImageItem(); self.seg_item.setZValue(10)
+        self.layer_items = {}
         self.selected_item = pg.ImageItem(); self.selected_item.setZValue(11)
         self.vb.addItem(self.img_item)
         self.vb.addItem(self.seg_item)
@@ -228,7 +229,31 @@ class PlaneWidget(QWidget):
     def _refresh_overlay(self):
         seg = self.owner.seg
         if seg is None:
-            self.seg_item.clear(); self.selected_item.clear(); return
+            self.seg_item.clear(); self.selected_item.clear()
+            for item in self.layer_items.values(): item.clear()
+            return
+        descriptors = getattr(self.owner, "rendering_layers", None)
+        if descriptors:
+            active_id = getattr(self.owner, "active_layer_id", None)
+            wanted = {d.layer_id for d in descriptors}
+            for layer_id in tuple(self.layer_items):
+                if layer_id not in wanted:
+                    item = self.layer_items.pop(layer_id); self.vb.removeItem(item)
+            for z, desc in enumerate(descriptors):
+                if desc.layer_id == active_id:
+                    item = self.seg_item
+                else:
+                    item = self.layer_items.get(desc.layer_id)
+                    if item is None:
+                        item = pg.ImageItem(); self.vb.addItem(item)
+                        self.layer_items[desc.layer_id] = item
+                item.setZValue(10 + z * .01); item.setOpacity(desc.opacity)
+                if not desc.visible:
+                    item.clear(); continue
+                lut = desc.segmentation.labels.lut(); maximum = max(1, len(lut) - 1)
+                arr = self.plane.slice2d(desc.segmentation.data, self.owner.cursor)
+                item.setImage(arr, autoLevels=False, levels=(0, maximum), lut=lut)
+            # Highlighting below is deliberately scoped to the active layer.
         lut = seg.labels.lut()
         max_id = max(1, lut.shape[0] - 1)
         current = self.plane.slice2d(seg.data, self.owner.cursor).copy()
@@ -340,6 +365,8 @@ class OrthoView(QWidget):
         super().__init__(parent)
         self.image = None
         self.seg = None
+        self.rendering_layers = ()
+        self.active_layer_id = None
         self.cursor = [0, 0, 0]
         self.window = (0.0, 1.0)
         self.controller = None
@@ -424,6 +451,13 @@ class OrthoView(QWidget):
             self.view3d.set_context(image, seg)
         self.windowChanged.emit(*self.window)
         self.cursorChanged.emit(*self.cursor)
+
+    def set_layers(self, image, descriptors, active_layer_id):
+        """Install independent slice overlays without combining their arrays."""
+        self.rendering_layers = tuple(descriptors)
+        self.active_layer_id = active_layer_id
+        active = next((x for x in self.rendering_layers if x.layer_id == active_layer_id), None)
+        self.set_data(image, active.segmentation if active else None)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)

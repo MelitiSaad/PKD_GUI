@@ -72,3 +72,6 @@ runtime availability and must stay on the render/UI thread.
 
 ## Round 1G stale-result policy
 Background work is tagged with document id, revision, task type, and parameters. Case replacement changes the document id and cancels outstanding work, so results from the previous document are rejected. Autosave workers also check retired session ids before and after the transactional write path.
+
+## Round 1H layer scope
+A case has one reference image and an ordered collection of stable-ID segmentation layers. Arrays and numeric label IDs remain layer-local and are never flattened or offset. Only the active layer supplies editing, history, Region Review, volumetry, edited slices, and 3D context; 2D rendering composites independently generated slices for all effectively visible layers. Background and recovery work must match case ID, layer ID, and source revision before application. Recovery remains per-layer; full workspace layout persistence is not implemented.

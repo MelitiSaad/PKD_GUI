@@ -41,6 +41,7 @@ from ..core.regions import (
 from ..core.background import ArraySnapshot, BackgroundTaskService, TaskTag
 from ..core.history import History
 from ..core.document import Disposition, SegmentationDocument
+from ..core.layers import SegmentationLayers
 from ..core.segmentation import Segmentation
 from ..core.volumetry import compute_volumes
 from ..core.session import Session
@@ -104,6 +105,7 @@ class MainWindow(QMainWindow):
         self.history: Optional[History] = None
         self.session: Optional[Session] = None
         self.document = SegmentationDocument()
+        self.layers = SegmentationLayers()
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
         self._enable_3d = enable_3d and volume_view.available()
@@ -178,6 +180,8 @@ class MainWindow(QMainWindow):
         self._mk("brush_minus"); self._mk("brush_plus")
         self._mk("reset_view", "reset_view"); self._mk("update_3d", "cube")
         self._mk("contrast", "threshold"); self._mk("remove_unused")
+        self._mk("toggle_segmentations", checkable=True)
+        self.act["toggle_segmentations"].setChecked(True)
         self._mk("region_toggle")
         self._mk("region_next")
         self._mk("region_prev")
@@ -255,6 +259,7 @@ class MainWindow(QMainWindow):
         for aid in _LAYOUT_OF:
             m_layout.addAction(self.act[aid])
         m_view.addAction(self.act["reset_view"])
+        m_view.addAction(self.act["toggle_segmentations"])
         m_view.addSeparator()
         for aid in ("update_3d", "continuous_3d", "axes_3d"):
             m_view.addAction(self.act[aid])
@@ -380,6 +385,7 @@ class MainWindow(QMainWindow):
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
         self.act["remove_unused"].triggered.connect(self._remove_unused)
+        self.act["toggle_segmentations"].triggered.connect(self._toggle_segmentations)
         self.act["continuous_3d"].toggled.connect(self._toggle_continuous_3d)
         self.act["region_toggle"].triggered.connect(self._toggle_region_review)
         self.act["region_next"].triggered.connect(self._region_next)
@@ -562,6 +568,17 @@ class MainWindow(QMainWindow):
     def _toggle_axes(self, on):
         self.ortho.set_3d_axes_visible(bool(on))
 
+    def _toggle_segmentations(self, checked=False):
+        # QAction shortcuts must not steal ordinary typing.
+        from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QLineEdit, QTextEdit
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit, QComboBox, QAbstractSpinBox)):
+            self.act["toggle_segmentations"].setChecked(self.layers.global_overlay_visible)
+            return
+        self.layers.global_overlay_visible = bool(checked)
+        self.ortho.rendering_layers = self.layers.rendering_layers()
+        self.ortho.redraw_overlay()
+
     @gui_guard
     def _open_contrast(self):
         if self.image is None:
@@ -703,6 +720,9 @@ class MainWindow(QMainWindow):
         self._retire_session(remove=True)
         self.image = image
         self.seg = seg
+        self.layers = SegmentationLayers(image)
+        layer = self.layers.add(os.path.basename(seg_path) if seg_path else "Untitled segmentation",
+                                seg, path=seg_path, make_active=True)
         self._case_id = uuid.uuid4().hex
         self.background.set_document(self._case_id, seg.revision)
         self.document = (SegmentationDocument.loaded(image, seg, seg_path)
@@ -711,7 +731,7 @@ class MainWindow(QMainWindow):
         self.history = History(seg)
         self.history.on_change = self._refresh_undo
         self.controller.set_context(image, seg, self.history)
-        self.ortho.set_data(image, seg)
+        self.ortho.set_layers(image, self.layers.rendering_layers(), layer.layer_id)
         self.panel.set_context(image, seg)
         self._reset_region_review()
         self.slice_slider.setRange(0, image.n_slices - 1)
