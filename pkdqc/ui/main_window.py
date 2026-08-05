@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from .. import config, icons, theme
 from ..core import commands, io, segops
 from ..core.regions import (
-    DEFAULT_CONNECTIVITY, GroupingMode, RegionReviewState, build_region_index,
+    DEFAULT_CONNECTIVITY, RegionReviewState, build_region_index,
     clear_review_progress, delete_label_checked, delete_region_checked,
     invalidate_after_edit, load_review_progress, progress_identity, save_review_progress,
 )
@@ -446,6 +446,9 @@ class MainWindow(QMainWindow):
         self.region_panel.clearProgressRequested.connect(self._region_clear_progress)
         self.region_panel.groupingChanged.connect(self._region_set_grouping)
         self.region_panel.connectivityChanged.connect(self._region_set_connectivity)
+        self.region_panel.includedLabelsChanged.connect(self._region_set_included_labels)
+        self.region_panel.sortChanged.connect(self._region_set_sort)
+        self.region_panel.filterChanged.connect(self._region_set_filter)
 
     def _apply_shortcuts(self):
         stored = self.settings.value(config.SK_SHORTCUTS, {}) or {}
@@ -645,6 +648,8 @@ class MainWindow(QMainWindow):
             self._sync_document_state()
             name = os.path.basename(self.document.segmentation_path or "segmentation")
             self._set_saved_state("saved", extra=f"to {name}")
+            if getattr(self, "region_state", None) is not None:
+                self._save_region_progress()
             self.statusBar().showMessage(f"Saved {name}", 4000)
         return ok
 
@@ -921,6 +926,7 @@ class MainWindow(QMainWindow):
             self._submit_region_index()
         self.region_panel.active = self._region_active
         self.region_panel.set_index(self.region_index, self.region_state, stale=self._region_stale)
+        self._update_enabled()
 
     def _submit_region_index(self):
         if self.image is None or self.seg is None:
@@ -1055,6 +1061,45 @@ class MainWindow(QMainWindow):
             self._submit_region_index()
         self._save_region_progress()
 
+    def _region_set_included_labels(self, text):
+        if self.seg is None or self.image is None:
+            return
+        try:
+            labels = self._parse_label_list(text)
+        except ValueError:
+            self.statusBar().showMessage("Included labels must be numbers or ranges such as 1,2,7-9.", 5000)
+            return
+        self.region_state.included_labels = labels
+        if self.region_index is not None:
+            self.region_index = self.region_index.with_included_labels(labels or self.region_index.labels)
+            self.region_state.included_labels = set(self.region_index.included_labels)
+        self.region_panel.set_index(self.region_index, self.region_state, stale=self._region_stale)
+        self._save_region_progress()
+
+    def _region_set_sort(self, sort):
+        self.region_state.sort_mode = str(sort)
+        self.region_panel.set_index(self.region_index, self.region_state, stale=self._region_stale)
+        self._save_region_progress()
+
+    def _region_set_filter(self, filter_mode):
+        self.region_state.filter_mode = str(filter_mode)
+        self.region_state.current_position = 0
+        self.region_panel.set_index(self.region_index, self.region_state, stale=self._region_stale)
+        self._save_region_progress()
+
+    def _parse_label_list(self, text):
+        labels = set()
+        for part in str(text or "").replace(";", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                a, b = part.split("-", 1)
+                labels.update(range(int(a), int(b) + 1))
+            else:
+                labels.add(int(part))
+        return labels
+
     def _region_clear_progress(self):
         identity = self._review_identity()
         if identity:
@@ -1124,6 +1169,10 @@ class MainWindow(QMainWindow):
         has_seg = self.seg is not None
         self.act["save"].setEnabled(has_seg)
         self.act["save_as"].setEnabled(has_seg)
+        self.act["region_toggle"].setEnabled(has_seg)
+        for aid in ("region_next", "region_prev", "region_reviewed",
+                    "region_unreviewed", "region_delete", "region_isolate"):
+            self.act[aid].setEnabled(has_seg and getattr(self, "_region_active", False))
         self.btn_cleanup.setEnabled(has_img)
         self.brush_spin.setEnabled(has_img and self.controller.tool == "brush"
                                    if hasattr(self, "controller") else False)

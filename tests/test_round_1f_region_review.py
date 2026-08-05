@@ -241,3 +241,89 @@ def test_nifti_style_apply_volume_regression_for_region_delete_result():
     new = data.copy(); new[1, 1, 1] = 0
     cmd = apply_volume(seg, new, "region delete")
     assert cmd is not None and cmd.flat_idx.size == 1
+
+
+def test_review_state_queue_sort_filter_counts_use_live_metadata():
+    data = np.zeros((8, 8, 4), dtype=np.uint16)
+    data[1, 1, 1] = 1
+    data[3:5, 3:5, 2] = 2
+    idx = build_region_index(data, table([1, 2]), geom(data.shape), connectivity=26)
+    state = RegionReviewState(included_labels={1, 2}, sort_mode=SortMode.UNREVIEWED_FIRST.value)
+    first = state.current(idx)
+    state.review_by_fingerprint[first.fingerprint.key()] = ReviewStatus.REVIEWED.value
+    reviewed, remaining, changed = state.reviewed_remaining_counts(idx)
+    assert (reviewed, remaining, changed) == (1, 1, 0)
+    state.filter_mode = FilterMode.REVIEWED.value
+    assert state.queue(idx) == (first,)
+    state.filter_mode = FilterMode.UNREVIEWED.value
+    assert first not in state.queue(idx)
+
+
+def test_numeric_labels_survive_save_reload_but_names_and_colors_are_regenerated(tmp_path):
+    from pkdqc.core.io import load_segmentation, save_segmentation
+    from pkdqc.core.volume import ImageVolume
+
+    data = np.zeros((5, 5, 3), dtype=np.uint16)
+    data[1, 1, 1] = 7
+    data[2, 2, 1] = 42
+    custom = table([7, 42])
+    custom.labels[7].name = "Custom cyst name"
+    custom.labels[7].color = (1, 2, 3)
+    seg = Segmentation(data.copy(), custom)
+    image = ImageVolume(np.zeros(data.shape, dtype=np.float32), (1, 1, 1), np.eye(4))
+    out = tmp_path / "roundtrip.nii.gz"
+    save_segmentation(seg, image, str(out))
+    loaded = load_segmentation(str(out), data.shape, np.eye(4))
+    np.testing.assert_array_equal(loaded.data, data)
+    assert set(loaded.labels.labels) == {7, 42}
+    assert loaded.labels.labels[7].name != "Custom cyst name"
+    assert loaded.labels.labels[7].color != (1, 2, 3)
+
+
+def test_progress_is_application_owned_not_adjacent_to_nifti_and_clearable(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "appdata"))
+    seg_path = tmp_path / "case.nii.gz"
+    identity = progress_identity(
+        segmentation_path=str(seg_path), shape=(3, 3, 3), affine=np.eye(4), dtype="uint16", labels=[1])
+    state = RegionReviewState(included_labels={1})
+    written = save_review_progress(identity, state)
+    assert written.parent.name == "region_review"
+    assert written.parent != tmp_path
+    assert not (tmp_path / "case.region_review.json").exists()
+    assert load_review_progress(identity) is not None
+    clear_review_progress(identity)
+    assert load_review_progress(identity) is None
+
+
+def test_sparse_high_label_index_memory_tracks_foreground_not_max_label():
+    data = np.zeros((10, 10, 4), dtype=np.uint16)
+    data[1, 1, 1] = 1
+    data[8, 8, 2] = 65535
+    idx = build_region_index(data, table([1, 65535]), geom(data.shape), connectivity=26)
+    assert sum(r.flat_indices.nbytes for r in idx.records) <= 2 * np.dtype(np.int64).itemsize
+    assert max(idx.labels) == 65535
+
+
+def test_region_review_ui_source_contains_required_controls_and_context_shortcuts():
+    from pathlib import Path
+    panel = Path("pkdqc/ui/region_review.py").read_text(encoding="utf-8")
+    main = Path("pkdqc/ui/main_window.py").read_text(encoding="utf-8")
+    assert "Included labels" in panel
+    assert "Sort" in panel and "Filter" in panel
+    assert "Delete current connected region" in panel
+    assert "Delete entire label" in panel
+    for key in ('"R"', '"Space"', '"Shift+Space"', '"N"', '"P"', '"Delete"', '"Q"'):
+        assert key in main
+    assert 'has_seg and getattr(self, "_region_active", False)' in main
+
+
+def test_included_label_changes_reuse_existing_index_records_without_reindexing():
+    data = np.zeros((8, 8, 4), dtype=np.uint16)
+    data[1, 1, 1] = 1
+    data[2, 2, 1] = 2
+    idx = build_region_index(data, table([1, 2]), geom(data.shape), connectivity=26)
+    narrowed = idx.with_included_labels({2})
+    assert narrowed.records is idx.records
+    assert narrowed.included_labels == frozenset({2})
+    assert narrowed.total_voxel_count == 1
+    assert len(narrowed.items(GroupingMode.CONNECTED)) == 1

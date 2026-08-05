@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
-from ..core.regions import DEFAULT_CONNECTIVITY, GroupingMode, RegionIndex, RegionReviewState
+from ..core.regions import (
+    DEFAULT_CONNECTIVITY, FilterMode, GroupingMode, RegionIndex, RegionReviewState, SortMode,
+)
 
 
 def _title(text: str) -> QLabel:
@@ -33,6 +35,9 @@ class RegionReviewPanel(QWidget):
     clearProgressRequested = Signal()
     groupingChanged = Signal(str)
     connectivityChanged = Signal(int)
+    includedLabelsChanged = Signal(str)
+    sortChanged = Signal(str)
+    filterChanged = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -60,6 +65,30 @@ class RegionReviewPanel(QWidget):
             self.connectivity.addItem(f"{value}-neighbour", value)
         self.connectivity.setCurrentIndex(2)
         root.addWidget(QLabel("Connectivity")); root.addWidget(self.connectivity)
+
+        self.included = QLineEdit()
+        self.included.setPlaceholderText("Included labels, e.g. 1,2,7-9; blank = all")
+        root.addWidget(QLabel("Included labels")); root.addWidget(self.included)
+
+        self.sorting = QComboBox()
+        self.sorting.addItem("Largest volume first", SortMode.LARGEST.value)
+        self.sorting.addItem("Smallest volume first", SortMode.SMALLEST.value)
+        self.sorting.addItem("Superior to inferior", SortMode.SUPERIOR_TO_INFERIOR.value)
+        self.sorting.addItem("Left to right", SortMode.LEFT_TO_RIGHT.value)
+        self.sorting.addItem("Flagged first", SortMode.FLAGGED_FIRST.value)
+        self.sorting.addItem("Unreviewed first", SortMode.UNREVIEWED_FIRST.value)
+        self.sorting.addItem("Numeric label", SortMode.NUMERIC_LABEL.value)
+        self.sorting.addItem("Label name", SortMode.LABEL_NAME.value)
+        root.addWidget(QLabel("Sort")); root.addWidget(self.sorting)
+
+        self.filtering = QComboBox()
+        self.filtering.addItem("All", FilterMode.ALL.value)
+        self.filtering.addItem("Unreviewed", FilterMode.UNREVIEWED.value)
+        self.filtering.addItem("Reviewed", FilterMode.REVIEWED.value)
+        self.filtering.addItem("Changed", FilterMode.CHANGED.value)
+        self.filtering.addItem("Flagged", FilterMode.FLAGGED.value)
+        self.filtering.addItem("Selected labels", FilterMode.SELECTED_LABELS.value)
+        root.addWidget(QLabel("Filter")); root.addWidget(self.filtering)
 
         row = QHBoxLayout()
         self.btn_toggle = QPushButton("Enter")
@@ -104,12 +133,17 @@ class RegionReviewPanel(QWidget):
         self.btn_clear.clicked.connect(self.clearProgressRequested.emit)
         self.grouping.currentIndexChanged.connect(lambda _i: self.groupingChanged.emit(str(self.grouping.currentData())))
         self.connectivity.currentIndexChanged.connect(lambda _i: self.connectivityChanged.emit(int(self.connectivity.currentData())))
+        self.included.editingFinished.connect(lambda: self.includedLabelsChanged.emit(self.included.text()))
+        self.sorting.currentIndexChanged.connect(lambda _i: self.sortChanged.emit(str(self.sorting.currentData())))
+        self.filtering.currentIndexChanged.connect(lambda _i: self.filterChanged.emit(str(self.filtering.currentData())))
         self.set_available(False)
 
     def set_available(self, available: bool) -> None:
         for w in (self.btn_toggle, self.btn_rebuild, self.btn_next, self.btn_prev, self.btn_reviewed,
                   self.btn_unreviewed, self.btn_delete_region, self.btn_delete_label, self.btn_isolate,
                   self.btn_clear, self.grouping, self.connectivity):
+            w.setEnabled(bool(available))
+        for w in (self.included, self.sorting, self.filtering):
             w.setEnabled(bool(available))
 
     def set_index(self, index: RegionIndex | None, state: RegionReviewState, *, indexing: bool = False, stale: bool = False) -> None:
@@ -124,8 +158,12 @@ class RegionReviewPanel(QWidget):
             cur = state.current(index)
             total = len(state.queue(index))
             pos = 0 if cur is None else state.current_position + 1
+            reviewed, remaining, changed = state.reviewed_remaining_counts(index)
             suffix = " · stale" if stale else ""
-            self.status.setText(f"Region {pos} of {total} · revision {index.revision}{suffix}")
+            self.status.setText(
+                f"Region {pos} of {total} · reviewed {reviewed} · "
+                f"remaining {remaining} · changed {changed} · revision {index.revision}{suffix}"
+            )
             self.details.setText(_details(index, state))
         self.btn_toggle.setText("Leave" if self.active else "Enter")
 
@@ -141,5 +179,5 @@ def _details(index: RegionIndex, state: RegionReviewState) -> str:
         f"Component: {cur.voxel_count:,} voxels · {cur.volume_mm3:,.1f} mm³ · {cur.volume_ml:,.3f} mL\n"
         f"Label total: {label.voxel_count:,} voxels · {label.volume_mm3:,.1f} mm³ · {label.volume_ml:,.3f} mL\n"
         f"Included total: {index.total_volume_mm3:,.1f} mm³ · {index.total_volume_ml:,.3f} mL\n"
-        f"State: {cur.review_state}; flags: {flags}"
+        f"State: {state.status_for(cur)}; flags: {flags}"
     )

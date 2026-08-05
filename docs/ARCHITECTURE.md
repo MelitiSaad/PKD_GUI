@@ -146,3 +146,12 @@ index builds through `BackgroundTaskService` and applies only non-stale results;
 isolation do not enter undo history or modify voxel data. Review progress is stored atomically
 under the application data directory with PHI-safe technical identity hashes rather than NIfTI
 sidecars. See `docs/REGION_REVIEW.md`.
+
+### Region Review hardening
+
+Round 1F.1 keeps component analysis in `core.regions` and leaves live voxel data
+owned by `Segmentation`. `MainWindow` is limited to task scheduling, UI state,
+and applying validated edit commands. Region Review shortcuts are context-gated
+so ordinary editing remains available without entering review mode. Custom label
+names/colors are UI metadata and are not claimed to survive NIfTI Save/Save As;
+numeric label values remain authoritative.

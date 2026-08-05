@@ -151,6 +151,14 @@ class RegionIndex:
                 out.extend(r for r in self.records if r.label_id == lid)
         return tuple(out)
 
+    def with_included_labels(self, labels: Iterable[int]) -> "RegionIndex":
+        included = frozenset(int(v) for v in labels if int(v) in self.labels)
+        return RegionIndex(
+            self.document_id, self.revision, self.connectivity, self.shape,
+            self.voxel_volume_mm3, self.records, self.labels,
+            included or frozenset(self.labels),
+        )
+
     def sorted_records(self, sort: SortMode | str = SortMode.LARGEST) -> Tuple[RegionRecord, ...]:
         records = [r for r in self.records if r.label_id in self.included_labels]
         sort = SortMode(sort)
@@ -202,7 +210,46 @@ class RegionReviewState:
     stale: bool = False
 
     def queue(self, index: RegionIndex) -> Tuple[RegionRecord, ...]:
-        return index.sorted_records(self.sort_mode)
+        records = [r for r in index.records if r.label_id in index.included_labels]
+        mode = FilterMode(self.filter_mode)
+        if mode == FilterMode.UNREVIEWED:
+            records = [r for r in records if self.status_for(r) == ReviewStatus.UNREVIEWED.value]
+        elif mode == FilterMode.REVIEWED:
+            records = [r for r in records if self.status_for(r) == ReviewStatus.REVIEWED.value]
+        elif mode == FilterMode.CHANGED:
+            records = [r for r in records if self.status_for(r) == ReviewStatus.CHANGED.value]
+        elif mode == FilterMode.FLAGGED:
+            records = [r for r in records if r.flags]
+        elif mode == FilterMode.SELECTED_LABELS:
+            records = [r for r in records if r.label_id in self.included_labels]
+
+        sort = SortMode(self.sort_mode)
+        if sort == SortMode.LARGEST:
+            key = lambda r: (-r.volume_mm3, r.label_id, r.transient_id)
+        elif sort == SortMode.SMALLEST:
+            key = lambda r: (r.volume_mm3, r.label_id, r.transient_id)
+        elif sort == SortMode.SUPERIOR_TO_INFERIOR:
+            key = lambda r: (-r.centroid_world[2], r.label_id, r.transient_id)
+        elif sort == SortMode.LEFT_TO_RIGHT:
+            key = lambda r: (r.centroid_world[0], r.label_id, r.transient_id)
+        elif sort == SortMode.FLAGGED_FIRST:
+            key = lambda r: (not bool(r.flags), -r.volume_mm3, r.label_id)
+        elif sort == SortMode.UNREVIEWED_FIRST:
+            key = lambda r: (self.status_for(r) == ReviewStatus.REVIEWED.value, r.label_id, r.transient_id)
+        elif sort == SortMode.NUMERIC_LABEL:
+            key = lambda r: (r.label_id, r.transient_id)
+        else:
+            key = lambda r: (r.label_name.lower(), r.label_id, r.transient_id)
+        return tuple(sorted(records, key=key))
+
+    def status_for(self, record: RegionRecord) -> str:
+        return self.review_by_fingerprint.get(record.fingerprint.key(), record.review_state)
+
+    def reviewed_remaining_counts(self, index: RegionIndex) -> Tuple[int, int, int]:
+        records = [r for r in index.records if r.label_id in index.included_labels]
+        reviewed = sum(1 for r in records if self.status_for(r) == ReviewStatus.REVIEWED.value)
+        changed = sum(1 for r in records if self.status_for(r) == ReviewStatus.CHANGED.value)
+        return reviewed, max(0, len(records) - reviewed - changed), changed
 
     def current(self, index: RegionIndex) -> Optional[RegionRecord]:
         q = self.queue(index)

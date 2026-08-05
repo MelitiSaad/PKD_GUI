@@ -95,3 +95,12 @@ PHI-safe review-progress persistence, and deterministic performance benchmarks. 
 remain: same-label touching regions are one component, local rebuild currently falls back to a full
 coalesced rebuild when split/merge correctness cannot be proven, and DICOM SEG/export remains out
 of scope.
+
+### Round 1F.1 stabilization
+
+Round 1F.1 hardens Region Review integration with stronger labeling-convention
+coverage, context-gated keyboard shortcuts, sort/filter/included-label UI
+controls, save/reload numeric-label regression tests, explicit documentation
+that custom names/colors are not yet persisted in NIfTI, manual QA fixture
+generation, and denser performance/memory benchmarks. No new major product
+feature is introduced.

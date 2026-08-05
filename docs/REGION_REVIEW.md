@@ -108,3 +108,56 @@ hundreds of regions. Full rebuilds are coalesced and performed outside the UI
 thread. The component index stores exact flat voxel indices for safe deletion,
 which costs memory proportional to nonzero voxel count. Same-label touching
 regions remain a known limitation until explicit split/relabel tools are added.
+
+## Round 1F.1 hardening notes
+
+Region Review distinguishes numeric label values from display names and colors.
+Numeric values are part of the NIfTI segmentation and are preserved through
+indexing, deletion/undo, Save, and reload. Current NIfTI Save/Save As does not
+persist custom application label names or custom colors; those may be regenerated
+from numeric IDs on reload. Optional label-metadata persistence remains a later
+milestone and must not be introduced as a mandatory adjacent sidecar.
+
+The Region Review panel is optional. Its keyboard actions are enabled only while
+a segmentation is loaded and Region Review is active, so ordinary editing,
+brush controls, Fill, Save, and dialog text entry remain the default workflow.
+Filtering, sorting, included-label selection, grouping, and connectivity operate
+on review metadata and indexes only; they do not mark the segmentation dirty.
+
+Review progress is retained in the application data directory until the user
+clears it, the application storage is removed, or a future retention preference
+changes that policy. Identity mismatch blocks automatic reuse and leaves the
+segmentation untouched.
+
+## Manual QA fixture generation
+
+Run the deterministic generator from the repository root:
+
+```bash
+python scripts/generate_region_review_qa.py /tmp/pkdqc-region-review-qa
+```
+
+It writes a synthetic non-patient image and five supported NIfTI segmentations:
+`one_color_300_regions.nii.gz`, `individual_300_labels.nii.gz`,
+`mixed_shared_and_individual.nii.gz`, `touching_same_label_one_component.nii.gz`,
+and `sparse_high_label_values.nii.gz`. Do not commit generated NIfTI outputs.
+
+Manual QA checklist:
+
+1. Open `synthetic_image.nii.gz`.
+2. Load each segmentation file one at a time.
+3. Enter Region Review with `R` or the panel button.
+4. Switch grouping modes and verify total included volume does not change.
+5. Change connectivity and confirm the same-label touching example remains one
+   component under 26-neighbour connectivity.
+6. Navigate with `N`/`P`; confirm the crosshair lands inside the highlighted item.
+7. Press `Space` to mark reviewed and advance; press `Shift+Space` to mark
+   unreviewed.
+8. Toggle isolation with `Q` and confirm Show all restores visibility without
+   changing voxel values.
+9. Delete one connected region, undo with `Ctrl+Z`, and verify other labels and
+   same-label components remain unchanged.
+10. Use the separately worded `Delete entire label…` action only after reading
+    its component/voxel preview.
+11. Save, close/reopen the case, and confirm numeric labels persist and review
+    progress resumes when identity matches.
