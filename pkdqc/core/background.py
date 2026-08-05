@@ -41,10 +41,12 @@ class TaskTag:
     revision: int
     task_type: str
     params: Tuple[Tuple[str, Any], ...] = ()
+    layer_id: str = ""
 
     @classmethod
-    def make(cls, document_id: str, revision: int, task_type: str, params: Optional[dict] = None) -> "TaskTag":
-        return cls(str(document_id), int(revision), str(task_type), tuple(sorted((params or {}).items())))
+    def make(cls, document_id: str, revision: int, task_type: str, params: Optional[dict] = None,
+             layer_id: str = "") -> "TaskTag":
+        return cls(str(document_id), int(revision), str(task_type), tuple(sorted((params or {}).items())), str(layer_id))
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class BackgroundTaskService:
         self.executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pkdqc-bg")
         self.document_id = uuid.uuid4().hex
         self.revision = -1
+        self.layer_revisions: Dict[str, int] = {}
         self._running: Dict[str, _Spec] = {}
         self._pending: Dict[str, _Spec] = {}
         self._completed: list[tuple[_Spec, Future]] = []
@@ -113,10 +116,20 @@ class BackgroundTaskService:
         self.cancel_all()
         self.document_id = document_id or uuid.uuid4().hex
         self.revision = int(revision)
+        self.layer_revisions.clear()
         return self.document_id
 
     def update_revision(self, revision: int) -> None:
         self.revision = int(revision)
+
+    def update_layer_revision(self, layer_id: str, revision: int) -> None:
+        self.layer_revisions[str(layer_id)] = int(revision)
+
+    def retire_layer(self, layer_id: str) -> None:
+        self.layer_revisions.pop(str(layer_id), None)
+        for task_type in tuple(set(self._running) | set(self._pending)):
+            specs = (self._running.get(task_type), self._pending.get(task_type))
+            if any(s and s.tag.layer_id == str(layer_id) for s in specs): self.cancel_task_type(task_type)
 
     @property
     def queue_size(self) -> int:
@@ -133,18 +146,19 @@ class BackgroundTaskService:
             raise RuntimeError("background service is shut down")
         spec = _Spec(tag, work, apply, on_error, latest_only)
         with self._lock:
-            if latest_only and tag.task_type in self._running:
-                old = self._pending.get(tag.task_type)
+            key = self._key(tag)
+            if latest_only and key in self._running:
+                old = self._pending.get(key)
                 if old and old.handle:
                     old.handle.cancel()
-                running = self._running[tag.task_type]
+                running = self._running[key]
                 if running.handle:
                     running.handle.token.cancel()
                 token = CancellationToken()
                 future = Future()
                 handle = TaskHandle(uuid.uuid4().hex, tag, token, future)
                 spec.handle = handle
-                self._pending[tag.task_type] = spec
+                self._pending[key] = spec
                 self.last_status = f"queued {tag.task_type}"
                 return handle
             return self._start_locked(spec)
@@ -154,7 +168,7 @@ class BackgroundTaskService:
         future = self.executor.submit(spec.work, token)
         handle = TaskHandle(uuid.uuid4().hex, spec.tag, token, future)
         spec.handle = handle
-        self._running[spec.tag.task_type] = spec
+        self._running[self._key(spec.tag)] = spec
         self.last_status = f"running {spec.tag.task_type}"
         future.add_done_callback(lambda fut, s=spec: self._record_done(s, fut))
         return handle
@@ -170,8 +184,9 @@ class BackgroundTaskService:
         outcomes = []
         for spec, future in items:
             with self._lock:
-                self._running.pop(spec.tag.task_type, None)
-                pending = self._pending.pop(spec.tag.task_type, None)
+                key = self._key(spec.tag)
+                self._running.pop(key, None)
+                pending = self._pending.pop(key, None)
                 if pending is not None:
                     self._start_locked(pending)
             outcome = self._finish(spec, future)
@@ -203,15 +218,24 @@ class BackgroundTaskService:
     def stale_reason(self, tag: TaskTag) -> str:
         if tag.document_id != self.document_id:
             return "document changed"
-        if tag.revision != self.revision:
+        expected = self.layer_revisions.get(tag.layer_id) if tag.layer_id else self.revision
+        if tag.layer_id and expected is None:
+            return "layer changed"
+        if tag.revision != expected:
             return "revision changed"
         return ""
 
     def cancel_task_type(self, task_type: str) -> None:
         with self._lock:
-            for spec in (self._running.get(task_type), self._pending.pop(task_type, None)):
-                if spec and spec.handle:
-                    spec.handle.cancel()
+            matching = [key for key, spec in {**self._running, **self._pending}.items()
+                        if spec.tag.task_type == task_type]
+            for key in matching:
+                for spec in (self._running.get(key), self._pending.pop(key, None)):
+                    if spec and spec.handle: spec.handle.cancel()
+
+    @staticmethod
+    def _key(tag: TaskTag) -> str:
+        return f"{tag.task_type}:{tag.layer_id}" if tag.layer_id else tag.task_type
 
     def cancel_all(self) -> None:
         with self._lock:
