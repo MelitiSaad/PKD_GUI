@@ -151,6 +151,7 @@ def test_ui_save_actions_shortcut_enablement_and_indicator(image, monkeypatch):
     win = MainWindow(enable_3d=False)
     assert win.act["save"].shortcut().toString() == "Ctrl+S"
     assert not win.act["save"].isEnabled() and not win.act["save_as"].isEnabled()
+    Path(image.path).write_bytes(b"test image")
     win._set_case(image, Segmentation.empty_like(image.shape), None)
     assert win.act["save"].isEnabled() and win.act["save_as"].isEnabled()
     assert "Untitled segmentation" in win.lbl_document.text()
