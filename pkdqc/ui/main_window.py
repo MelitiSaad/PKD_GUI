@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from .. import config, icons, theme
 from ..core import io
 from ..core.history import History
+from ..core.document import Disposition, SegmentationDocument
 from ..core.segmentation import Segmentation
 from ..core.session import Session
 from ..errors import gui_guard
@@ -78,6 +79,7 @@ _SHORTCUTS = {
     "open_image": ("Open image", "Ctrl+O"),
     "load_seg": ("Load segmentation", "Ctrl+L"),
     "save": ("Save segmentation", "Ctrl+S"),
+    "save_as": ("Save segmentation as…", "Ctrl+Shift+S"),
     "new_seg": ("New segmentation", "Ctrl+N"),
     "next_edited": ("Next edited slice", "."),
     "prev_edited": ("Previous edited slice", ","),
@@ -116,6 +118,7 @@ class MainWindow(QMainWindow):
         self.seg: Optional[Segmentation] = None
         self.history: Optional[History] = None
         self.session: Optional[Session] = None
+        self.document = SegmentationDocument()
         self._edits_since_save = 0
         self._contrast_dlg: Optional[ContrastDialog] = None
         self._enable_3d = enable_3d and volume_view.available()
@@ -172,6 +175,7 @@ class MainWindow(QMainWindow):
 
         self._mk("undo", "undo"); self._mk("redo", "redo")
         self._mk("open_image", "open"); self._mk("load_seg", "layers"); self._mk("save", "save")
+        self._mk("save_as", "save")
         self._mk("new_seg")
         self._mk("next_edited", "next_edit"); self._mk("prev_edited", "prev_edit")
         self._mk("brush_minus"); self._mk("brush_plus")
@@ -214,7 +218,7 @@ class MainWindow(QMainWindow):
         for aid in ("open_image", "load_seg"):
             m_file.addAction(self.act[aid])
         m_file.addSeparator()
-        for aid in ("save", "new_seg"):
+        for aid in ("save", "save_as", "new_seg"):
             m_file.addAction(self.act[aid])
         m_file.addSeparator()
         act_quit = QAction("Quit", self); act_quit.setShortcut(QKeySequence("Ctrl+Q"))
@@ -224,7 +228,7 @@ class MainWindow(QMainWindow):
         m_edit.addAction(self.act["undo"]); m_edit.addAction(self.act["redo"])
 
         m_seg = mb.addMenu("&Segmentation")
-        for aid in ("load_seg", "save", "new_seg"):
+        for aid in ("load_seg", "save", "save_as", "new_seg"):
             m_seg.addAction(self.act[aid])
         m_seg.addSeparator()
         m_cleanup = m_seg.addMenu("Clean up")
@@ -330,9 +334,10 @@ class MainWindow(QMainWindow):
     def _build_statusbar(self):
         sb = self.statusBar()
         self.lbl_coord = QLabel(""); self.lbl_tool = QLabel(""); self.lbl_hint = QLabel("")
-        self.lbl_saved = QLabel("")
+        self.lbl_document = QLabel(""); self.lbl_saved = QLabel("")
         for w in (self.lbl_coord, self.lbl_tool, self.lbl_hint):
             sb.addWidget(w)
+        sb.addPermanentWidget(self.lbl_document)
         sb.addPermanentWidget(self.lbl_saved)
 
     # ================================================================ wiring
@@ -349,6 +354,7 @@ class MainWindow(QMainWindow):
         self.act["open_image"].triggered.connect(self._open_image)
         self.act["load_seg"].triggered.connect(self._load_seg)
         self.act["save"].triggered.connect(self._save)
+        self.act["save_as"].triggered.connect(self._save_as)
         self.act["new_seg"].triggered.connect(self._new_seg)
         self.act["next_edited"].triggered.connect(lambda: self._jump_edited(+1))
         self.act["prev_edited"].triggered.connect(lambda: self._jump_edited(-1))
@@ -523,6 +529,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         image = io.load_image(path)
+        if not self._guard_unsaved():
+            return
         self._set_case(image, Segmentation.empty_like(image.shape), None)
         self.statusBar().showMessage(
             f"Loaded {os.path.basename(path)}  ·  shape {image.shape}  ·  "
@@ -538,28 +546,83 @@ class MainWindow(QMainWindow):
         if not path:
             return
         seg = io.load_segmentation(path, self.image.shape, self.image.affine)
+        if not self._guard_unsaved():
+            return
         self._set_case(self.image, seg, path)
         self.statusBar().showMessage(f"Overlaid {os.path.basename(path)}", 4000)
 
     @gui_guard
     def _new_seg(self):
-        if self.image is not None:
+        if self.image is not None and self._guard_unsaved():
             self._set_case(self.image, Segmentation.empty_like(self.image.shape), None)
 
     @gui_guard
     def _save(self):
-        if self.image is None or self.seg is None:
-            return
-        default = self.settings.value(config.SK_LAST_DIR, "")
-        path, _ = QFileDialog.getSaveFileName(self, "Save segmentation",
-                                              os.path.join(default, "segmentation.nii.gz"),
-                                              "NIfTI (*.nii.gz *.nii)")
-        if not path:
-            return
-        io.save_segmentation(self.seg, self.image, path)
-        self.seg.clear_dirty()
-        self._set_saved_state("saved", extra=f"to {os.path.basename(path)}")
-        self.statusBar().showMessage(f"Saved {os.path.basename(path)}", 4000)
+        return self._save_impl(False)
+
+    @gui_guard
+    def _save_as(self):
+        return self._save_impl(True)
+
+    def _save_impl(self, as_new_path=False):
+        if not self.document.has_segmentation:
+            return False
+        if as_new_path:
+            ok = self.document.save_as(io.save_segmentation, self._choose_save_path,
+                                       self._confirm_overwrite)
+        else:
+            ok = self.document.save(io.save_segmentation, self._choose_save_path,
+                                    self._confirm_overwrite)
+        if ok:
+            if self.session is not None:
+                self.session.seg_path = self.document.segmentation_path
+                # A successful user export leaves no unsaved work to recover.
+                self.session.mark_clean(remove=True)
+            self._sync_document_state()
+            name = os.path.basename(self.document.segmentation_path or "segmentation")
+            self._set_saved_state("saved", extra=f"to {name}")
+            self.statusBar().showMessage(f"Saved {name}", 4000)
+        return ok
+
+    def _choose_save_path(self):
+        default_dir = self.settings.value(config.SK_LAST_DIR, "")
+        current = self.document.segmentation_path
+        suggested = current or os.path.join(default_dir, "segmentation.nii.gz")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save segmentation as", suggested, "NIfTI (*.nii.gz *.nii)",
+            options=QFileDialog.Option.DontConfirmOverwrite)
+        if path:
+            self.settings.setValue(config.SK_LAST_DIR, os.path.dirname(path))
+        return path or None
+
+    def _confirm_overwrite(self, path):
+        answer = QMessageBox.question(
+            self, "Replace existing segmentation?",
+            f"“{os.path.basename(path)}” already exists. Replace it?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        return answer == QMessageBox.StandardButton.Save
+
+    def _guard_unsaved(self):
+        def decide():
+            box = QMessageBox(self)
+            box.setWindowTitle("Unsaved segmentation changes")
+            box.setText("Save changes to the current segmentation before continuing?")
+            save = box.addButton(QMessageBox.StandardButton.Save)
+            discard = box.addButton(QMessageBox.StandardButton.Discard)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is save:
+                return Disposition.SAVE
+            if box.clickedButton() is discard:
+                return Disposition.DISCARD
+            return Disposition.CANCEL
+        return self.document.guard(decide, lambda: self._save_impl(False),
+                                   self._discard_checkpoint)
+
+    def _discard_checkpoint(self):
+        if self.session is not None:
+            self.session.mark_clean(remove=True)
 
     def _pick_open(self, title, filt):
         start = self.settings.value(config.SK_LAST_DIR, "")
@@ -570,8 +633,13 @@ class MainWindow(QMainWindow):
 
     # ================================================================ case
     def _set_case(self, image, seg, seg_path):
+        if self.session is not None:
+            self.session.mark_clean(remove=True)
         self.image = image
         self.seg = seg
+        self.document = (SegmentationDocument.loaded(image, seg, seg_path)
+                         if seg_path else SegmentationDocument(
+                             image, seg, None, seg.revision, True))
         self.history = History(seg)
         self.history.on_change = self._refresh_undo
         self.controller.set_context(image, seg, self.history)
@@ -579,7 +647,7 @@ class MainWindow(QMainWindow):
         self.panel.set_context(image, seg)
         self.slice_slider.setRange(0, image.n_slices - 1)
         self.slice_slider.setValue(self.ortho.z)
-        self.session = Session(image.path, seg_path)
+        self.session = Session(image, seg_path)
         self.session.begin()
         self._edits_since_save = 0
         self._contrast_dlg = None
@@ -587,11 +655,15 @@ class MainWindow(QMainWindow):
         self._update_enabled()
         self.panel.recompute()
         self._set_saved_state("saved")
+        self._sync_document_state()
         QTimer.singleShot(200, self.ortho.refresh_3d)  # one-time build; not on every edit
 
-    def load_recovered(self, image, seg, session_id):
-        self._set_case(image, seg, seg_path=None)
-        self.seg.dirty = True
+    def load_recovered(self, image, seg, recovery):
+        self._set_case(image, seg, seg_path=recovery.seg_path)
+        self.document.saved_revision = recovery.saved_revision
+        self.document.never_saved = recovery.seg_path is None
+        self.seg.dirty = recovery.dirty
+        self._sync_document_state()
         self._set_saved_state("unsaved", extra="recovered")
 
     # ================================================================ labels
@@ -621,7 +693,8 @@ class MainWindow(QMainWindow):
 
     def _mark_dirty(self):
         self._edits_since_save += 1
-        self._set_saved_state("unsaved")
+        self._sync_document_state()
+        self._set_saved_state("unsaved" if self.document.dirty else "saved")
         self._idle_timer.start(config.AUTOSAVE_IDLE_MS)
         self._schedule_volumes()
         if self._edits_since_save >= config.AUTOSAVE_EVERY_N_EDITS:
@@ -637,7 +710,8 @@ class MainWindow(QMainWindow):
         if self.session is None or self.seg is None:
             return
         try:
-            if self.session.save(self.seg):
+            if self.session.save(self.seg, saved_revision=self.document.saved_revision,
+                                 dirty=self.document.dirty):
                 self._edits_since_save = 0
                 self._set_saved_state("autosaved")
         except Exception:
@@ -655,6 +729,16 @@ class MainWindow(QMainWindow):
         self.lbl_saved.setText(f"\u25cf  {text}{suffix}  ")
         self.lbl_saved.setStyleSheet(f"color: {colors.get(state, theme.TEXT_MUTED)};")
 
+    def _sync_document_state(self):
+        dirty = self.document.dirty
+        if self.seg is not None:
+            self.seg.dirty = dirty
+        path = self.document.segmentation_path
+        name = os.path.basename(path) if path else ("Untitled segmentation" if self.seg else "")
+        self.lbl_document.setText((name + (" *" if dirty else "")) if name else "")
+        self.lbl_document.setToolTip(path or "Segmentation has not been saved")
+        self.setWindowTitle(f"{'*' if dirty else ''}{config.APP_NAME}")
+
     # ================================================================ misc
     def _refresh_undo(self):
         self.act["undo"].setEnabled(bool(self.history and self.history.can_undo))
@@ -663,9 +747,12 @@ class MainWindow(QMainWindow):
     def _update_enabled(self):
         has_img = self.image is not None
         for aid in list(_LAYOUT_OF) + [t[0] for t in TOOLS] + [o[0] for o in OPERATIONS] + [
-                "save", "new_seg", "next_edited", "prev_edited", "reset_view", "contrast",
+                "new_seg", "next_edited", "prev_edited", "reset_view", "contrast",
                 "remove_unused", "update_3d", "load_seg", "brush_threshold", "brush_protect"]:
             self.act[aid].setEnabled(has_img)
+        has_seg = self.seg is not None
+        self.act["save"].setEnabled(has_seg)
+        self.act["save_as"].setEnabled(has_seg)
         self.btn_cleanup.setEnabled(has_img)
         self.brush_spin.setEnabled(has_img and self.controller.tool == "brush"
                                    if hasattr(self, "controller") else False)
@@ -705,10 +792,12 @@ class MainWindow(QMainWindow):
         clicked = box.clickedButton()
         if clicked is img_btn:
             image = io.load_image(path)
-            self._set_case(image, Segmentation.empty_like(image.shape), None)
+            if self._guard_unsaved():
+                self._set_case(image, Segmentation.empty_like(image.shape), None)
         elif clicked is seg_btn:
             seg = io.load_segmentation(path, self.image.shape, self.image.affine)
-            self._set_case(self.image, seg, path)
+            if self._guard_unsaved():
+                self._set_case(self.image, seg, path)
 
     # -- window state ----------------------------------------------------
     def _restore_window_state(self):
@@ -717,14 +806,16 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geo)
 
     def closeEvent(self, ev):
+        if not self._guard_unsaved():
+            ev.ignore()
+            return
         try:
             self.settings.setValue(config.SK_GEOMETRY, self.saveGeometry())
             if self.session is not None:
-                self._autosave()
                 self.session.mark_clean()
         except Exception:
             log.exception("Error during close")
-        super().closeEvent(ev)
+        ev.accept()
 
 
 def _btn(action):
