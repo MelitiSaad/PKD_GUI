@@ -270,6 +270,11 @@ class LabelPanel(QWidget):
             self.overlayChanged.emit()
 
     # -- volumes ---------------------------------------------------------
+
+    def set_volumes(self, volumes):
+        self._volumes = list(volumes)
+        self._fill_table()
+
     def recompute(self) -> None:
         if self.seg is None:
             return

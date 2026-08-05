@@ -1,0 +1,183 @@
+"""Compact Region Review panel.
+
+The widget is intentionally thin: all indexing, measurements, persistence, and
+safe deletion rules live in :mod:`pkdqc.core.regions` so they are testable
+without Qt.
+"""
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+)
+
+from ..core.regions import (
+    DEFAULT_CONNECTIVITY, FilterMode, GroupingMode, RegionIndex, RegionReviewState, SortMode,
+)
+
+
+def _title(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setProperty("role", "subtitle")
+    return label
+
+
+class RegionReviewPanel(QWidget):
+    toggled = Signal()
+    rebuildRequested = Signal()
+    nextRequested = Signal()
+    previousRequested = Signal()
+    reviewedRequested = Signal()
+    unreviewedRequested = Signal()
+    deleteRegionRequested = Signal()
+    deleteLabelRequested = Signal()
+    isolateRequested = Signal()
+    clearProgressRequested = Signal()
+    groupingChanged = Signal(str)
+    connectivityChanged = Signal(int)
+    includedLabelsChanged = Signal(str)
+    sortChanged = Signal(str)
+    filterChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Panel")
+        self.active = False
+        self.index: RegionIndex | None = None
+        self.state = RegionReviewState(connectivity=DEFAULT_CONNECTIVITY)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(8)
+        root.addWidget(_title("REGION REVIEW"))
+        self.status = QLabel("Not active")
+        self.status.setWordWrap(True)
+        root.addWidget(self.status)
+
+        self.grouping = QComboBox()
+        self.grouping.addItem("Connected regions", GroupingMode.CONNECTED.value)
+        self.grouping.addItem("Labels/colors", GroupingMode.LABELS.value)
+        self.grouping.addItem("Labels with connected regions", GroupingMode.LABELS_WITH_COMPONENTS.value)
+        root.addWidget(QLabel("Group regions by")); root.addWidget(self.grouping)
+
+        self.connectivity = QComboBox()
+        for value in (6, 18, 26):
+            self.connectivity.addItem(f"{value}-neighbour", value)
+        self.connectivity.setCurrentIndex(2)
+        root.addWidget(QLabel("Connectivity")); root.addWidget(self.connectivity)
+
+        self.included = QLineEdit()
+        self.included.setPlaceholderText("Included labels, e.g. 1,2,7-9; blank = all")
+        root.addWidget(QLabel("Included labels")); root.addWidget(self.included)
+
+        self.sorting = QComboBox()
+        self.sorting.addItem("Largest volume first", SortMode.LARGEST.value)
+        self.sorting.addItem("Smallest volume first", SortMode.SMALLEST.value)
+        self.sorting.addItem("Superior to inferior", SortMode.SUPERIOR_TO_INFERIOR.value)
+        self.sorting.addItem("Left to right", SortMode.LEFT_TO_RIGHT.value)
+        self.sorting.addItem("Flagged first", SortMode.FLAGGED_FIRST.value)
+        self.sorting.addItem("Unreviewed first", SortMode.UNREVIEWED_FIRST.value)
+        self.sorting.addItem("Numeric label", SortMode.NUMERIC_LABEL.value)
+        self.sorting.addItem("Label name", SortMode.LABEL_NAME.value)
+        root.addWidget(QLabel("Sort")); root.addWidget(self.sorting)
+
+        self.filtering = QComboBox()
+        self.filtering.addItem("All", FilterMode.ALL.value)
+        self.filtering.addItem("Unreviewed", FilterMode.UNREVIEWED.value)
+        self.filtering.addItem("Reviewed", FilterMode.REVIEWED.value)
+        self.filtering.addItem("Changed", FilterMode.CHANGED.value)
+        self.filtering.addItem("Flagged", FilterMode.FLAGGED.value)
+        self.filtering.addItem("Selected labels", FilterMode.SELECTED_LABELS.value)
+        root.addWidget(QLabel("Filter")); root.addWidget(self.filtering)
+
+        row = QHBoxLayout()
+        self.btn_toggle = QPushButton("Enter")
+        self.btn_rebuild = QPushButton("Rebuild")
+        row.addWidget(self.btn_toggle); row.addWidget(self.btn_rebuild)
+        root.addLayout(row)
+
+        row2 = QHBoxLayout()
+        self.btn_prev = QPushButton("Previous")
+        self.btn_next = QPushButton("Next")
+        row2.addWidget(self.btn_prev); row2.addWidget(self.btn_next)
+        root.addLayout(row2)
+
+        self.btn_reviewed = QPushButton("Reviewed + next")
+        self.btn_unreviewed = QPushButton("Mark unreviewed")
+        root.addWidget(self.btn_reviewed); root.addWidget(self.btn_unreviewed)
+
+        div = QFrame(); div.setProperty("role", "divider"); root.addWidget(div)
+        self.details = QLabel("Open a segmentation to review connected regions or labels.")
+        self.details.setWordWrap(True)
+        root.addWidget(self.details)
+
+        self.btn_delete_region = QPushButton("Delete current connected region")
+        self.btn_delete_region.setProperty("danger", "true")
+        self.btn_delete_label = QPushButton("Delete entire label…")
+        self.btn_delete_label.setProperty("danger", "true")
+        self.btn_isolate = QPushButton("Isolate / show all")
+        self.btn_clear = QPushButton("Clear progress")
+        for b in (self.btn_delete_region, self.btn_delete_label, self.btn_isolate, self.btn_clear):
+            root.addWidget(b)
+        root.addStretch(1)
+
+        self.btn_toggle.clicked.connect(self.toggled.emit)
+        self.btn_rebuild.clicked.connect(self.rebuildRequested.emit)
+        self.btn_next.clicked.connect(self.nextRequested.emit)
+        self.btn_prev.clicked.connect(self.previousRequested.emit)
+        self.btn_reviewed.clicked.connect(self.reviewedRequested.emit)
+        self.btn_unreviewed.clicked.connect(self.unreviewedRequested.emit)
+        self.btn_delete_region.clicked.connect(self.deleteRegionRequested.emit)
+        self.btn_delete_label.clicked.connect(self.deleteLabelRequested.emit)
+        self.btn_isolate.clicked.connect(self.isolateRequested.emit)
+        self.btn_clear.clicked.connect(self.clearProgressRequested.emit)
+        self.grouping.currentIndexChanged.connect(lambda _i: self.groupingChanged.emit(str(self.grouping.currentData())))
+        self.connectivity.currentIndexChanged.connect(lambda _i: self.connectivityChanged.emit(int(self.connectivity.currentData())))
+        self.included.editingFinished.connect(lambda: self.includedLabelsChanged.emit(self.included.text()))
+        self.sorting.currentIndexChanged.connect(lambda _i: self.sortChanged.emit(str(self.sorting.currentData())))
+        self.filtering.currentIndexChanged.connect(lambda _i: self.filterChanged.emit(str(self.filtering.currentData())))
+        self.set_available(False)
+
+    def set_available(self, available: bool) -> None:
+        for w in (self.btn_toggle, self.btn_rebuild, self.btn_next, self.btn_prev, self.btn_reviewed,
+                  self.btn_unreviewed, self.btn_delete_region, self.btn_delete_label, self.btn_isolate,
+                  self.btn_clear, self.grouping, self.connectivity):
+            w.setEnabled(bool(available))
+        for w in (self.included, self.sorting, self.filtering):
+            w.setEnabled(bool(available))
+
+    def set_index(self, index: RegionIndex | None, state: RegionReviewState, *, indexing: bool = False, stale: bool = False) -> None:
+        self.index = index
+        self.state = state
+        self.active = True if self.active else False
+        if indexing:
+            self.status.setText("Indexing regions…")
+        elif index is None:
+            self.status.setText("No region index")
+        else:
+            cur = state.current(index)
+            total = len(state.queue(index))
+            pos = 0 if cur is None else state.current_position + 1
+            reviewed, remaining, changed = state.reviewed_remaining_counts(index)
+            suffix = " · stale" if stale else ""
+            self.status.setText(
+                f"Region {pos} of {total} · reviewed {reviewed} · "
+                f"remaining {remaining} · changed {changed} · revision {index.revision}{suffix}"
+            )
+            self.details.setText(_details(index, state))
+        self.btn_toggle.setText("Leave" if self.active else "Enter")
+
+
+def _details(index: RegionIndex, state: RegionReviewState) -> str:
+    cur = state.current(index)
+    if cur is None:
+        return f"Total included volume: {index.total_volume_mm3:,.1f} mm³ ({index.total_volume_ml:,.3f} mL)"
+    label = index.labels[cur.label_id]
+    flags = ", ".join(cur.flags) if cur.flags else "none"
+    return (
+        f"Label {cur.label_id} · {cur.label_name}\n"
+        f"Component: {cur.voxel_count:,} voxels · {cur.volume_mm3:,.1f} mm³ · {cur.volume_ml:,.3f} mL\n"
+        f"Label total: {label.voxel_count:,} voxels · {label.volume_mm3:,.1f} mm³ · {label.volume_ml:,.3f} mL\n"
+        f"Included total: {index.total_volume_mm3:,.1f} mm³ · {index.total_volume_ml:,.3f} mL\n"
+        f"State: {state.status_for(cur)}; flags: {flags}"
+    )

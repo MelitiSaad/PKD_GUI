@@ -33,7 +33,8 @@ class RecoveryDialog(QDialog):
         self.list = QListWidget()
         for r in recs:
             name = os.path.basename(r.image_path)
-            item = QListWidgetItem(f"{name}   ·   last autosaved {r.age_str}")
+            fallback = "   ·   using an older verified checkpoint" if r.warning else ""
+            item = QListWidgetItem(f"{name}   ·   last checkpoint {r.age_str}{fallback}")
             item.setData(Qt.ItemDataRole.UserRole, r)
             self.list.addItem(item)
         self.list.setCurrentRow(0)
@@ -107,3 +108,28 @@ def about_html() -> str:
         "<p style='color:#98A2B3'>Load an image, overlay a segmentation, correct it "
         "slice by slice, and export volumes in mm³ and mL.</p>"
     )
+
+class DicomSeriesDialog(QDialog):
+    """Minimal PHI-safe chooser for valid DICOM image series."""
+    def __init__(self, candidates, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select DICOM series")
+        self.chosen = None
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Multiple valid DICOM image series were found. Select one to load."))
+        self.list = QListWidget()
+        self._candidates = list(candidates)
+        for candidate in self._candidates:
+            self.list.addItem(candidate.display_description)
+        self.list.setCurrentRow(0)
+        layout.addWidget(self.list)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def accept(self):
+        row = self.list.currentRow()
+        if 0 <= row < len(self._candidates):
+            self.chosen = self._candidates[row]
+        super().accept()

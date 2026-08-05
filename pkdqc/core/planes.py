@@ -90,6 +90,10 @@ class Plane:
         h = lo_len - 1 - int(cursor[self.lo])
         return v, h
 
+    def edge_markers(self, geometry):
+        from .geometry import markers_for_plane
+        return markers_for_plane(geometry, self)
+
 
 PLANES = {
     AXIAL: Plane(AXIAL, 2),
