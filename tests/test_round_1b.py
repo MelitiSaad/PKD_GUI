@@ -159,8 +159,12 @@ def test_ui_save_actions_shortcut_enablement_and_indicator(image, monkeypatch):
     assert win.lbl_document.text().endswith("*")
     assert win.windowTitle().startswith("*")
     win.document.saved_revision = win.seg.revision
-    win.session.mark_clean(); win._autosave_timer.stop(); win._idle_timer.stop(); win.close()
+    win.session.mark_clean()
+    win.close()
     app.processEvents()
+    assert not any(timer.isActive() for timer in (
+        win._autosave_timer, win._idle_timer, win._bg_timer, win._vol_timer
+    ))
 
 
 def test_ui_save_and_save_as_are_wired_without_importing_qt():
