@@ -49,6 +49,7 @@ from ..errors import gui_guard
 from .contrast import ContrastDialog
 from .dialogs import DicomSeriesDialog, ShortcutsDialog, about_html
 from .label_panel import LabelPanel
+from .layers_panel import LayersPanel
 from .ortho import OrthoView
 from .region_review import RegionReviewPanel
 from .tools import ToolController
@@ -111,6 +112,8 @@ class MainWindow(QMainWindow):
         self._enable_3d = enable_3d and volume_view.available()
         self._case_id = uuid.uuid4().hex
         self._retired_sessions: set[str] = set()
+        self._layer_sessions = {}
+        self._layer_regions = {}
 
         self.act: dict[str, QAction] = {}
         self._make_actions()
@@ -174,6 +177,7 @@ class MainWindow(QMainWindow):
         self._mk("undo", "undo"); self._mk("redo", "redo")
         self._mk("open_image", "open"); self._mk("load_seg", "layers"); self._mk("save", "save")
         self._mk("save_as", "save")
+        self._mk("save_all", "save")
         self._mk("new_seg")
         self._mk("quit")
         self._mk("next_edited", "next_edit"); self._mk("prev_edited", "prev_edit")
@@ -226,7 +230,7 @@ class MainWindow(QMainWindow):
         for aid in ("open_image", "load_seg"):
             m_file.addAction(self.act[aid])
         m_file.addSeparator()
-        for aid in ("save", "save_as", "new_seg"):
+        for aid in ("save", "save_as", "save_all", "new_seg"):
             m_file.addAction(self.act[aid])
         m_file.addSeparator()
         self.act["quit"].triggered.connect(self.close); m_file.addAction(self.act["quit"])
@@ -237,6 +241,7 @@ class MainWindow(QMainWindow):
         m_seg = mb.addMenu("&Segmentation")
         for aid in ("load_seg", "save", "save_as", "new_seg"):
             m_seg.addAction(self.act[aid])
+        m_seg.addAction(self.act["save_all"])
         m_seg.addSeparator()
         m_cleanup = m_seg.addMenu("Clean up")
         for oid, _l, _i, _k in OPERATIONS:
@@ -350,6 +355,12 @@ class MainWindow(QMainWindow):
         rdock.setWidget(self.region_panel); rdock.setFixedWidth(324)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, rdock)
 
+        self.layers_panel = LayersPanel()
+        ldock = QDockWidget("Layers")
+        ldock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        ldock.setWidget(self.layers_panel); ldock.setFixedWidth(324)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, ldock)
+
     def _build_statusbar(self):
         sb = self.statusBar()
         self.lbl_coord = QLabel(""); self.lbl_tool = QLabel(""); self.lbl_hint = QLabel("")
@@ -374,6 +385,7 @@ class MainWindow(QMainWindow):
         self.act["load_seg"].triggered.connect(self._load_seg)
         self.act["save"].triggered.connect(self._save)
         self.act["save_as"].triggered.connect(self._save_as)
+        self.act["save_all"].triggered.connect(self._save_all)
         self.act["new_seg"].triggered.connect(self._new_seg)
         self.act["next_edited"].triggered.connect(lambda: self._jump_edited(+1))
         self.act["prev_edited"].triggered.connect(lambda: self._jump_edited(-1))
@@ -409,6 +421,7 @@ class MainWindow(QMainWindow):
         self.brush_mode.currentTextChanged.connect(self._on_brush_mode)
         self.panel.activeLabelChanged.connect(self._on_active_label_changed)
         self.panel.overlayChanged.connect(self._on_overlay_changed)
+        self.panel.opacityChanged.connect(self._active_opacity_changed)
         self.panel.deleteLabelRequested.connect(self._delete_label)
         self.region_panel.toggled.connect(self._toggle_region_review)
         self.region_panel.rebuildRequested.connect(self._submit_region_index)
@@ -425,6 +438,14 @@ class MainWindow(QMainWindow):
         self.region_panel.includedLabelsChanged.connect(self._region_set_included_labels)
         self.region_panel.sortChanged.connect(self._region_set_sort)
         self.region_panel.filterChanged.connect(self._region_set_filter)
+        self.layers_panel.activeRequested.connect(self._activate_layer)
+        self.layers_panel.visibilityRequested.connect(self._layer_visibility)
+        self.layers_panel.opacityRequested.connect(self._layer_opacity)
+        self.layers_panel.addExistingRequested.connect(self._load_seg)
+        self.layers_panel.addBlankRequested.connect(self._add_blank_layer)
+        self.layers_panel.renameRequested.connect(self._rename_layer)
+        self.layers_panel.removeRequested.connect(self._remove_layer)
+        self.layers_panel.moveRequested.connect(self._move_layer)
 
     def _apply_shortcuts(self):
         self._shortcut_assignments = migrate_shortcuts(self.settings.value(config.SK_SHORTCUTS, {}) or {}, COMMANDS)
@@ -604,7 +625,7 @@ class MainWindow(QMainWindow):
         image = io.load_image(path, dicom_selector=self._select_dicom_series)
         if not self._guard_unsaved():
             return
-        self._set_case(image, Segmentation.empty_like(image.shape), None)
+        self._set_image_only(image)
         self.statusBar().showMessage(
             f"Loaded {os.path.basename(path)}  ·  shape {image.shape}  ·  "
             f"spacing {tuple(round(s, 2) for s in image.spacing)} mm", 8000)
@@ -619,15 +640,50 @@ class MainWindow(QMainWindow):
         if not path:
             return
         seg = io.load_segmentation(path, self.image.shape, self.image.affine)
-        if not self._guard_unsaved():
-            return
-        self._set_case(self.image, seg, path)
-        self.statusBar().showMessage(f"Overlaid {os.path.basename(path)}", 4000)
+        self._integrate_loaded_seg(seg, path)
+
+    def _integrate_loaded_seg(self, seg, path):
+        mode = "add"
+        if len(self.layers):
+            box = QMessageBox(self); box.setWindowTitle("Load segmentation")
+            box.setText("Add this segmentation as another layer or replace the active layer?")
+            add = box.addButton("Add as Another Layer", QMessageBox.ButtonRole.AcceptRole)
+            replace = box.addButton("Replace Active Layer", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QMessageBox.StandardButton.Cancel); box.setDefaultButton(add); box.exec()
+            if box.clickedButton() is replace: mode = "replace"
+            elif box.clickedButton() is not add: return
+        if mode == "replace":
+            active = self.layers.active
+            if active and not self._guard_layer(active): return
+            old_id = active.layer_id if active else None
+            if old_id: self._retire_layer(old_id)
+            layer = self.layers.replace_active(os.path.basename(path), seg, path=path, affine=self.image.affine)
+        else:
+            layer = self.layers.add(os.path.basename(path), seg, path=path, affine=self.image.affine, make_active=True)
+        self._begin_layer_session(layer); self._activate_layer(layer.layer_id)
+        self.statusBar().showMessage(f"Added {os.path.basename(path)} as a segmentation layer", 4000)
 
     @gui_guard
     def _new_seg(self):
-        if self.image is not None and self._guard_unsaved():
-            self._set_case(self.image, Segmentation.empty_like(self.image.shape), None)
+        if self.image is None: return
+        if not len(self.layers): return self._add_blank_layer()
+        box = QMessageBox(self); box.setWindowTitle("New segmentation")
+        box.setText("Add a blank layer or replace the active layer?")
+        add = box.addButton("Add Blank Layer", QMessageBox.ButtonRole.AcceptRole)
+        replace = box.addButton("Replace Active Layer", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel); box.setDefaultButton(add); box.exec()
+        if box.clickedButton() is add: self._add_blank_layer()
+        elif box.clickedButton() is replace:
+            active = self.layers.active
+            if active and not self._guard_layer(active): return
+            if active: self._retire_layer(active.layer_id)
+            layer = self.layers.replace_active("Untitled segmentation", Segmentation.empty_like(self.image.shape))
+            self._begin_layer_session(layer); self._activate_layer(layer.layer_id)
+
+    def _add_blank_layer(self):
+        if self.image is None: return
+        layer = self.layers.add_blank(make_active=True)
+        self._begin_layer_session(layer); self._activate_layer(layer.layer_id)
 
     @gui_guard
     def _save(self):
@@ -638,27 +694,39 @@ class MainWindow(QMainWindow):
         return self._save_impl(True)
 
     def _save_impl(self, as_new_path=False):
-        if not self.document.has_segmentation:
+        layer = self.layers.active
+        if layer is None:
             return False
-        self.background.cancel_task_type("autosave")
-        if as_new_path:
-            ok = self.document.save_as(io.save_segmentation, self._choose_save_path,
-                                       self._confirm_overwrite)
-        else:
-            ok = self.document.save(io.save_segmentation, self._choose_save_path,
-                                    self._confirm_overwrite)
+        ok = self.layers.save_layer(layer.layer_id, io.save_segmentation,
+                                    lambda _layer: self._choose_save_path(), self._confirm_overwrite,
+                                    save_as=as_new_path)
         if ok:
-            if self.session is not None:
-                self.session.seg_path = self.document.segmentation_path
-                # A successful user export leaves no unsaved work to recover.
-                self._retire_session(remove=True)
-            self._sync_document_state()
-            name = os.path.basename(self.document.segmentation_path or "segmentation")
+            self._retire_layer(layer.layer_id)
+            self._sync_active_aliases(); self._sync_document_state()
+            name = os.path.basename(layer.path or "segmentation")
             self._set_saved_state("saved", extra=f"to {name}")
             if getattr(self, "region_state", None) is not None:
                 self._save_region_progress()
             self.statusBar().showMessage(f"Saved {name}", 4000)
         return ok
+
+    @gui_guard
+    def _save_all(self):
+        for layer in tuple(self.layers.dirty_layers):
+            if not self.layers.save_layer(layer.layer_id, io.save_segmentation,
+                    lambda _layer: self._choose_save_path_for(_layer), self._confirm_overwrite):
+                self._refresh_layers(); return False
+            self._retire_layer(layer.layer_id)
+        self._sync_active_aliases(); self._sync_document_state(); self._refresh_layers()
+        self.statusBar().showMessage("Saved all segmentation layers", 4000); return True
+
+    def _choose_save_path_for(self, layer):
+        current = self.layers.active_layer_id
+        try:
+            self.layers.set_active(layer.layer_id); self._sync_active_aliases()
+            return self._choose_save_path()
+        finally:
+            if current and self.layers.get(current): self.layers.set_active(current); self._sync_active_aliases()
 
     def _choose_save_path(self):
         default_dir = self.settings.value(config.SK_LAST_DIR, "")
@@ -680,12 +748,14 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Save
 
     def _guard_unsaved(self):
+        dirty = self.layers.dirty_layers
+        if not dirty: return True
         def decide():
             box = QMessageBox(self)
-            box.setWindowTitle("Unsaved segmentation changes")
-            box.setText("Save changes to the current segmentation before continuing?")
-            save = box.addButton(QMessageBox.StandardButton.Save)
-            discard = box.addButton(QMessageBox.StandardButton.Discard)
+            box.setWindowTitle("Unsaved segmentation layers")
+            box.setText("Save changes before continuing?\n\n" + "\n".join(f"• {x.name}" for x in dirty))
+            save = box.addButton("Save All", QMessageBox.ButtonRole.AcceptRole)
+            discard = box.addButton("Discard All", QMessageBox.ButtonRole.DestructiveRole)
             box.addButton(QMessageBox.StandardButton.Cancel)
             box.exec()
             if box.clickedButton() is save:
@@ -693,8 +763,23 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is discard:
                 return Disposition.DISCARD
             return Disposition.CANCEL
-        return self.document.guard(decide, lambda: self._save_impl(False),
-                                   self._discard_checkpoint)
+        return self.layers.guard_all(lambda _layers: decide(), self._save_all,
+                                     lambda layer: self._retire_layer(layer.layer_id))
+
+    def _guard_layer(self, layer):
+        def decide(_layer):
+            box = QMessageBox(self); box.setWindowTitle("Unsaved layer")
+            box.setText(f"Save changes to “{layer.name}”?")
+            save = box.addButton(QMessageBox.StandardButton.Save)
+            discard = box.addButton(QMessageBox.StandardButton.Discard)
+            box.addButton(QMessageBox.StandardButton.Cancel); box.exec()
+            if box.clickedButton() is save: return Disposition.SAVE
+            if box.clickedButton() is discard: return Disposition.DISCARD
+            return Disposition.CANCEL
+        return self.layers.guard_layer(layer.layer_id, decide,
+            lambda target: self.layers.save_layer(target.layer_id, io.save_segmentation,
+                lambda chosen: self._choose_save_path_for(chosen), self._confirm_overwrite),
+            lambda target: self._retire_layer(target.layer_id))
 
     def _discard_checkpoint(self):
         self.background.cancel_all()
@@ -715,16 +800,29 @@ class MainWindow(QMainWindow):
         return path
 
     # ================================================================ case
+    def _set_image_only(self, image):
+        """Install a reference image with an intentionally empty layer stack."""
+        self._set_case(image, Segmentation.empty_like(image.shape), None)
+        placeholder = self.layers.active
+        if placeholder:
+            self._retire_layer(placeholder.layer_id); self.layers.remove(placeholder.layer_id)
+        self._sync_active_aliases(); self.controller.set_context(image, None, None)
+        self.ortho.set_layers(image, (), None); self.panel.set_context(image, None)
+        self._reset_region_review(); self._refresh_layers(); self._sync_document_state()
+
     def _set_case(self, image, seg, seg_path):
         self.background.cancel_all()
-        self._retire_session(remove=True)
+        for layer_id in tuple(self._layer_sessions): self._retire_layer(layer_id)
         self.image = image
         self.seg = seg
         self.layers = SegmentationLayers(image)
         layer = self.layers.add(os.path.basename(seg_path) if seg_path else "Untitled segmentation",
                                 seg, path=seg_path, make_active=True)
         self._case_id = uuid.uuid4().hex
+        self.layers.case_id = self._case_id
+        self._layer_sessions = {}; self._layer_regions = {}
         self.background.set_document(self._case_id, seg.revision)
+        self.background.update_layer_revision(layer.layer_id, seg.revision)
         self.document = (SegmentationDocument.loaded(image, seg, seg_path)
                          if seg_path else SegmentationDocument(
                              image, seg, None, seg.revision, True))
@@ -736,8 +834,7 @@ class MainWindow(QMainWindow):
         self._reset_region_review()
         self.slice_slider.setRange(0, image.n_slices - 1)
         self.slice_slider.setValue(self.ortho.z)
-        self.session = Session(image, seg_path)
-        self.session.begin()
+        self._begin_layer_session(layer)
         self._edits_since_save = 0
         self._contrast_dlg = None
         self._refresh_undo()
@@ -746,6 +843,81 @@ class MainWindow(QMainWindow):
         self._set_saved_state("saved")
         self._sync_document_state()
         QTimer.singleShot(200, self.ortho.refresh_3d)  # one-time build; not on every edit
+
+    def _begin_layer_session(self, layer):
+        session = Session(self.image, layer.path); session.begin()
+        self._layer_sessions[layer.layer_id] = session
+        if layer.layer_id == self.layers.active_layer_id: self.session = session
+
+    def _retire_layer(self, layer_id, remove=True):
+        session = self._layer_sessions.pop(layer_id, None)
+        if session:
+            self._retired_sessions.add(session.id); session.mark_clean(remove=remove)
+        self.background.retire_layer(layer_id)
+
+    def _sync_active_aliases(self):
+        layer = self.layers.active
+        self.seg = layer.segmentation if layer else None
+        self.history = layer.history if layer else None
+        self.session = self._layer_sessions.get(layer.layer_id) if layer else None
+        self.document = (SegmentationDocument(self.image, layer.segmentation, layer.path,
+                         layer.saved_revision, layer.never_saved) if layer else SegmentationDocument(image=self.image))
+
+    def _activate_layer(self, layer_id):
+        if self.layers.get(layer_id) is None: return
+        old = self.layers.active
+        if old is not None:
+            self._layer_regions[old.layer_id] = (self.region_state, self.region_index,
+                                                  self._region_active, self._region_stale)
+        self.layers.set_active(layer_id); self._sync_active_aliases()
+        self.background.update_layer_revision(layer_id, self.seg.revision)
+        self.history.on_change = self._refresh_undo
+        self.controller.set_context(self.image, self.seg, self.history)
+        self.ortho.set_layers(self.image, self.layers.rendering_layers(), layer_id)
+        self.panel.set_context(self.image, self.seg)
+        self.panel.opacity.blockSignals(True); self.panel.opacity.setValue(round(self.layers.active.opacity * 100)); self.panel.opacity.blockSignals(False)
+        stored = self._layer_regions.get(layer_id)
+        if stored:
+            self.region_state, self.region_index, self._region_active, self._region_stale = stored
+            self.region_panel.active = self._region_active
+            self.region_panel.set_index(self.region_index, self.region_state, stale=self._region_stale)
+        else: self._reset_region_review()
+        self._refresh_layers(); self._refresh_undo(); self._schedule_volumes(); self._sync_document_state()
+        if self.ortho.view3d is not None: self.ortho.view3d.set_context(self.image, self.seg)
+
+    def _refresh_layers(self):
+        self.layers_panel.set_layers(self.layers)
+        self.ortho.rendering_layers = self.layers.rendering_layers()
+        self.ortho.active_layer_id = self.layers.active_layer_id
+        self.ortho.redraw_overlay()
+        self._update_enabled()
+
+    def _layer_visibility(self, layer_id, visible):
+        self.layers.set_visible(layer_id, visible); self._refresh_layers()
+
+    def _layer_opacity(self, layer_id, opacity):
+        self.layers.set_opacity(layer_id, opacity); self._refresh_layers()
+
+    def _move_layer(self, layer_id, delta):
+        layer = self.layers.get(layer_id)
+        if layer: self.layers.move(layer_id, list(self.layers).index(layer) + delta); self._refresh_layers()
+
+    def _rename_layer(self, layer_id):
+        from PySide6.QtWidgets import QInputDialog
+        layer = self.layers.get(layer_id)
+        if not layer: return
+        name, ok = QInputDialog.getText(self, "Rename layer", "Display name:", text=layer.name)
+        if ok and name.strip(): self.layers.rename(layer_id, name); self._refresh_layers()
+
+    def _remove_layer(self, layer_id):
+        layer = self.layers.get(layer_id)
+        if not layer or not self._guard_layer(layer): return
+        self._retire_layer(layer_id); self._layer_regions.pop(layer_id, None); self.layers.remove(layer_id)
+        self._sync_active_aliases()
+        if self.layers.active: self._activate_layer(self.layers.active_layer_id)
+        else:
+            self.controller.set_context(self.image, None, None); self.ortho.set_layers(self.image, (), None)
+            self.panel.set_context(self.image, None); self._refresh_layers(); self._update_enabled()
 
     def load_recovered(self, image, seg, recovery):
         self._set_case(image, seg, seg_path=recovery.seg_path)
@@ -782,8 +954,9 @@ class MainWindow(QMainWindow):
     def _mark_dirty(self):
         self._edits_since_save += 1
         self._sync_document_state()
+        self._refresh_layers()
         if self.seg is not None:
-            self.background.update_revision(self.seg.revision)
+            self.background.update_layer_revision(self.layers.active_layer_id, self.seg.revision)
         self._set_saved_state("unsaved" if self.document.dirty else "saved")
         self._idle_timer.start(config.AUTOSAVE_IDLE_MS)
         self._schedule_volumes()
@@ -802,11 +975,16 @@ class MainWindow(QMainWindow):
             invalidate_after_edit(self.region_index) if self.region_index is not None else None
             self._submit_region_index()
 
+    def _active_opacity_changed(self, value):
+        layer = self.layers.active
+        if layer:
+            self.layers.set_opacity(layer.layer_id, value / 100.0); self._refresh_layers()
+
     def _schedule_volumes(self): self._vol_timer.start(350)
 
     def _tag(self, task_type, params=None):
         rev = self.seg.revision if self.seg is not None else -1
-        return TaskTag.make(self._case_id, rev, task_type, params)
+        return TaskTag.make(self._case_id, rev, task_type, params, self.layers.active_layer_id or "")
 
     def _snapshot(self):
         return ArraySnapshot.capture(self._case_id, self.seg.revision, self.seg.data)
@@ -818,12 +996,14 @@ class MainWindow(QMainWindow):
         snap = self._snapshot()
         image = self.image
         labels = copy.deepcopy(self.seg.labels)
+        layer_id = self.layers.active_layer_id
         self.panel.btn_compute.setText("Updating…")
         def work(token):
             token.raise_if_cancelled()
             seg = Segmentation(snap.data.copy(), labels)
             return compute_volumes(seg, image)
         def apply(volumes):
+            if self.layers.active_layer_id != layer_id: return
             self.panel.set_volumes(volumes)
             self.panel.btn_compute.setText("Compute volumes")
         def error(exc):
@@ -838,6 +1018,7 @@ class MainWindow(QMainWindow):
         snap = self._snapshot()
         labels = copy.deepcopy(self.seg.labels)
         protect = bool(self.controller.protect_existing)
+        layer_id = self.layers.active_layer_id
         self.statusBar().showMessage(f"Running {op_name}…", 2000)
         def work(token):
             token.raise_if_cancelled()
@@ -863,10 +1044,15 @@ class MainWindow(QMainWindow):
             if new_data is None:
                 self.statusBar().showMessage(f"{op_name} made no changes", 2500)
                 return
-            cmd = commands.apply_volume(self.seg, new_data, op_name)
+            layer = self.layers.get(layer_id)
+            if layer is None: return
+            cmd = commands.apply_volume(layer.segmentation, new_data, op_name)
             if cmd is not None:
-                self.history.push(cmd)
-                self.ortho.redraw_overlay(); self.ortho.notify_edit(); self._mark_dirty()
+                layer.history.push(cmd)
+                self.background.update_layer_revision(layer_id, layer.segmentation.revision)
+                if self.layers.active_layer_id == layer_id:
+                    self.ortho.redraw_overlay(); self.ortho.notify_edit(); self._mark_dirty()
+                else: self._refresh_layers()
                 self.statusBar().showMessage(f"Finished {op_name}", 2500)
         def error(exc):
             log.warning("Background cleanup failed: %s", exc.__class__.__name__)
@@ -874,14 +1060,18 @@ class MainWindow(QMainWindow):
         self.background.submit_destructive(tag, work, apply, error)
 
     def _autosave(self):
-        if self.session is None or self.seg is None:
-            return
-        tag = self._tag("autosave")
-        snap = self._snapshot()
-        saved_revision = self.document.saved_revision
-        dirty = self.document.dirty
-        session = self.session
-        self._set_saved_state("autosaving", extra=f"rev {snap.revision}")
+        dirty_layers = tuple(self.layers.dirty_layers)
+        if not dirty_layers: return
+        for layer in dirty_layers: self._autosave_layer(layer)
+
+    def _autosave_layer(self, layer):
+        session = self._layer_sessions.get(layer.layer_id)
+        if session is None: self._begin_layer_session(layer); session = self._layer_sessions[layer.layer_id]
+        snap = ArraySnapshot.capture(self._case_id, layer.segmentation.revision, layer.segmentation.data)
+        tag = TaskTag.make(self._case_id, snap.revision, "autosave", layer_id=layer.layer_id)
+        saved_revision, dirty = layer.saved_revision, layer.dirty
+        self.background.update_layer_revision(layer.layer_id, snap.revision)
+        self._set_saved_state("autosaving", extra=f"{layer.name} rev {snap.revision}")
         def work(token):
             seg = Segmentation(snap.data.copy())
             seg.revision = snap.revision
@@ -897,7 +1087,7 @@ class MainWindow(QMainWindow):
             revision, ok = result
             if ok:
                 self._edits_since_save = 0
-                self._set_saved_state("autosaved", extra=f"rev {revision}")
+                self._set_saved_state("autosaved", extra=f"{layer.name} rev {revision}")
         def error(exc):
             log.warning("Background autosave failed: %s", exc.__class__.__name__)
             self._set_saved_state("autosave error")
@@ -954,6 +1144,7 @@ class MainWindow(QMainWindow):
         geometry = self.image.geometry
         review = dict(self.region_state.review_by_fingerprint)
         included = set(self.region_state.included_labels) or None
+        layer_id = self.layers.active_layer_id
         self.region_panel.set_index(self.region_index, self.region_state, indexing=True, stale=self._region_stale)
         self.statusBar().showMessage("Indexing regions…", 2000)
         def work(token):
@@ -964,6 +1155,7 @@ class MainWindow(QMainWindow):
                 included_labels=included, review_state=review,
             )
         def apply(index):
+            if self.layers.active_layer_id != layer_id: return
             if not self.region_state.included_labels:
                 self.region_state.included_labels = set(index.labels)
             self.region_index = index
@@ -1150,10 +1342,11 @@ class MainWindow(QMainWindow):
         self.lbl_saved.setStyleSheet(f"color: {colors.get(state, theme.TEXT_MUTED)};")
 
     def _sync_document_state(self):
-        dirty = self.document.dirty
+        layer = self.layers.active
+        dirty = bool(layer and layer.dirty)
         if self.seg is not None:
             self.seg.dirty = dirty
-        path = self.document.segmentation_path
+        path = layer.path if layer else None
         name = os.path.basename(path) if path else ("Untitled segmentation" if self.seg else "")
         self.lbl_document.setText((name + (" *" if dirty else "")) if name else "")
         tip = path or "Segmentation has not been saved"
@@ -1165,7 +1358,7 @@ class MainWindow(QMainWindow):
                     f"voxel volume {g.voxel_volume_mm3:.6g} mm³, status {status}, "
                     "display convention radiological/RAS+")
         self.lbl_document.setToolTip(tip)
-        self.setWindowTitle(f"{'*' if dirty else ''}{config.APP_NAME}")
+        self.setWindowTitle(f"{'*' if self.layers.dirty else ''}{config.APP_NAME}")
 
     # ================================================================ misc
     def _refresh_undo(self):
@@ -1183,6 +1376,7 @@ class MainWindow(QMainWindow):
         has_seg = self.seg is not None
         self.act["save"].setEnabled(has_seg)
         self.act["save_as"].setEnabled(has_seg)
+        self.act["save_all"].setEnabled(bool(self.layers.dirty_layers))
         self.act["region_toggle"].setEnabled(has_seg)
         for aid in ("region_next", "region_prev", "region_reviewed",
                     "region_unreviewed", "region_delete", "region_isolate"):
@@ -1215,7 +1409,7 @@ class MainWindow(QMainWindow):
         path = urls[0].toLocalFile()
         if self.image is None:
             image = io.load_image(path)
-            self._set_case(image, Segmentation.empty_like(image.shape), None)
+            self._set_image_only(image)
             return
         box = QMessageBox(self)
         box.setWindowTitle("Load file as")
@@ -1228,11 +1422,10 @@ class MainWindow(QMainWindow):
         if clicked is img_btn:
             image = io.load_image(path)
             if self._guard_unsaved():
-                self._set_case(image, Segmentation.empty_like(image.shape), None)
+                self._set_image_only(image)
         elif clicked is seg_btn:
             seg = io.load_segmentation(path, self.image.shape, self.image.affine)
-            if self._guard_unsaved():
-                self._set_case(self.image, seg, path)
+            self._integrate_loaded_seg(seg, path)
 
     # -- window state ----------------------------------------------------
     def _restore_window_state(self):
@@ -1250,7 +1443,7 @@ class MainWindow(QMainWindow):
             self._idle_timer.stop()
             self._bg_timer.stop()
             self._vol_timer.stop()
-            self._retire_session(remove=True)
+            for layer_id in tuple(self._layer_sessions): self._retire_layer(layer_id)
             self.background.shutdown()
         except Exception:
             log.exception("Error during close")

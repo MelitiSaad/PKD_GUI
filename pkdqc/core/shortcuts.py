@@ -37,6 +37,7 @@ def build_command_registry(tools, operations) -> dict[str, CommandSpec]:
         ("undo", "Undo", "Editing"), ("redo", "Redo", "Editing"),
         ("open_image", "Open image", "File"), ("load_seg", "Load segmentation", "File"),
         ("save", "Save segmentation", "File"), ("save_as", "Save segmentation as…", "File"),
+        ("save_all", "Save All Segmentations", "File"),
         ("new_seg", "New segmentation", "File"), ("quit", "Quit", "File"),
         ("next_edited", "Next edited slice", "Navigation"), ("prev_edited", "Previous edited slice", "Navigation"),
         ("brush_minus", "Smaller brush", "Brush"), ("brush_plus", "Larger brush", "Brush"),

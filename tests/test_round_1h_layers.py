@@ -6,6 +6,8 @@ from pkdqc.core.layers import SegmentationLayers
 from pkdqc.core.segmentation import Segmentation
 from pkdqc.core.volume import ImageVolume
 from pkdqc.core.shortcuts import build_command_registry, migrate_shortcuts
+from pkdqc.core.background import BackgroundTaskService, TaskTag
+from pkdqc.core.document import Disposition
 
 
 def image(shape=(8, 9, 4)):
@@ -74,3 +76,25 @@ def test_new_s_shortcut_yields_to_an_existing_customization():
     assert migrate_shortcuts({}, registry)["toggle_segmentations"] == "S"
     assert migrate_shortcuts({"contrast": "S"}, registry)["toggle_segmentations"] == ""
     assert migrate_shortcuts({"toggle_segmentations": ""}, registry)["toggle_segmentations"] == ""
+
+
+def test_layered_guards_are_scoped_and_cancel_preserves_stack():
+    case = SegmentationLayers(image()); a = case.add_blank("a"); b = case.add_blank("b")
+    a.segmentation.mark_edited([0]); b.segmentation.mark_edited([1]); before = tuple(case)
+    assert not case.guard_layer(a.layer_id, lambda _: Disposition.CANCEL, lambda _: True, lambda _: None)
+    assert tuple(case) == before and a.dirty and b.dirty
+    discarded = []
+    assert case.guard_layer(a.layer_id, lambda _: Disposition.DISCARD, lambda _: False,
+                            lambda layer: discarded.append(layer.layer_id))
+    assert discarded == [a.layer_id] and b.dirty
+
+
+def test_background_results_are_isolated_by_layer_and_revision():
+    service = BackgroundTaskService(max_workers=1); service.set_document("case", 0)
+    service.update_layer_revision("a", 1); service.update_layer_revision("b", 4)
+    assert service.stale_reason(TaskTag.make("case", 1, "volumetry", layer_id="a")) == ""
+    assert service.stale_reason(TaskTag.make("case", 4, "volumetry", layer_id="b")) == ""
+    assert service.stale_reason(TaskTag.make("case", 4, "volumetry", layer_id="a")) == "revision changed"
+    service.retire_layer("a")
+    assert service.stale_reason(TaskTag.make("case", 1, "volumetry", layer_id="a")) == "layer changed"
+    service.shutdown()
