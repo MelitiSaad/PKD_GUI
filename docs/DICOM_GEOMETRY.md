@@ -66,3 +66,6 @@ DICOM SEG, gantry-tilt correction, general resampling, registration,
 anatomical-plane reslicing, color/vector images, tiled data, arbitrary enhanced
 multiframe dimensions, and compressed data without a configured pydicom pixel
 handler remain unsupported.
+
+## Round 1G DICOM note
+Current DICOM support is image-series loading with geometry validation and a PHI-safe chooser when multiple valid series are found. DICOM SEG export/import, registration, and resampling remain out of scope.

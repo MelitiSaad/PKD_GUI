@@ -312,8 +312,9 @@ def test_region_review_ui_source_contains_required_controls_and_context_shortcut
     assert "Sort" in panel and "Filter" in panel
     assert "Delete current connected region" in panel
     assert "Delete entire label" in panel
-    for key in ('"R"', '"Space"', '"Shift+Space"', '"N"', '"P"', '"Delete"', '"Q"'):
-        assert key in main
+    shortcuts = Path("pkdqc/core/shortcuts.py").read_text(encoding="utf-8")
+    assert "region_next" in shortcuts and "Region Review" in shortcuts
+    assert "RECOMMENDED_DEFAULTS" in shortcuts
     assert 'has_seg and getattr(self, "_region_active", False)' in main
 
 

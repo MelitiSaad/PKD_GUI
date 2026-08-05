@@ -165,7 +165,7 @@ def test_ui_save_actions_shortcut_enablement_and_indicator(image, monkeypatch):
 def test_ui_save_and_save_as_are_wired_without_importing_qt():
     source = Path("pkdqc/ui/main_window.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    assert '"save": ("Save segmentation", "Ctrl+S")' in source
+    assert "Ctrl+S" in Path("pkdqc/core/shortcuts.py").read_text(encoding="utf-8")
     assert 'self.act["save"].triggered.connect(self._save)' in source
     assert 'self.act["save_as"].triggered.connect(self._save_as)' in source
     assert 'for aid in ("load_seg", "save", "save_as", "new_seg")' in source

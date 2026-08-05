@@ -104,3 +104,6 @@ controls, save/reload numeric-label regression tests, explicit documentation
 that custom names/colors are not yet persisted in NIfTI, manual QA fixture
 generation, and denser performance/memory benchmarks. No new major product
 feature is introduced.
+
+## Round 1G stabilization status
+Round 1G is a temporary safety gate, not a feature freeze. It keeps Region Review optional, adds minimal recommended shortcut defaults with user configuration, hardens recovery-session retirement around background autosave, and adds CI coverage. Remaining release blockers include the absence of a product-owner-approved repository license, Windows packaging verification, and clinical validation; the next milestone should return to one focused feature or improvement per fresh branch.

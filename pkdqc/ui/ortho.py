@@ -231,7 +231,15 @@ class PlaneWidget(QWidget):
             self.seg_item.clear(); self.selected_item.clear(); return
         lut = seg.labels.lut()
         max_id = max(1, lut.shape[0] - 1)
-        current = self.plane.slice2d(seg.data, self.owner.cursor)
+        current = self.plane.slice2d(seg.data, self.owner.cursor).copy()
+        iso = getattr(self.owner, "region_state", None)
+        idx = getattr(self.owner, "region_index", None)
+        if iso is not None and idx is not None and iso.isolated_fingerprint:
+            rec = next((r for r in idx.records if r.fingerprint.key() == iso.isolated_fingerprint), None)
+            if rec is not None:
+                mask3 = np.zeros(seg.data.size, dtype=bool); mask3[rec.flat_indices] = True
+                visible = self.plane.slice2d(mask3.reshape(seg.data.shape), self.owner.cursor)
+                current[~visible] = 0
         self.seg_item.setImage(current, autoLevels=False, levels=(0, max_id), lut=lut)
         selected = self.owner.selected_label_id
         if selected is None:

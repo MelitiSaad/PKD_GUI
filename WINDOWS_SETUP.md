@@ -131,3 +131,6 @@ need your IT team's help.** Specifically:
 * The 3D view needs a real graphics card. This build leaves 3D out on purpose, so
   it stays lightweight and works even on basic/remote workstations (you'll see a
   "3D unavailable" panel; QC and volumes work fully).
+
+## Round 1G manual QA checklist
+On Windows, verify Open image, Load segmentation, Save, Save As, New segmentation, Undo, Redo, and Quit shortcuts; confirm specialized commands are unassigned until configured; confirm Keyboard Shortcuts can assign, clear, reject duplicates, persist, and reset. Verify Region Review enters only when requested, grouping changes navigation, isolation only changes overlay visibility, and Save/Discard/case replacement/clean close do not leave retired recovery sessions.

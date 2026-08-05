@@ -155,3 +155,6 @@ and applying validated edit commands. Region Review shortcuts are context-gated
 so ordinary editing remains available without entering review mode. Custom label
 names/colors are UI metadata and are not claimed to survive NIfTI Save/Save As;
 numeric label values remain authoritative.
+
+## Round 1G maintainability notes
+`MainWindow` remains the composition root for Qt widgets and signal wiring. Shortcut policy now lives in `pkdqc.core.shortcuts`, Region Review indexing and review-state rules remain in `pkdqc.core.regions`, and recovery persistence remains in `pkdqc.core.session`. Substantial algorithms and lifecycle rules should continue to live outside the window where practical.
