@@ -33,7 +33,8 @@ class RecoveryDialog(QDialog):
         self.list = QListWidget()
         for r in recs:
             name = os.path.basename(r.image_path)
-            item = QListWidgetItem(f"{name}   ·   last autosaved {r.age_str}")
+            fallback = "   ·   using an older verified checkpoint" if r.warning else ""
+            item = QListWidgetItem(f"{name}   ·   last checkpoint {r.age_str}{fallback}")
             item.setData(Qt.ItemDataRole.UserRole, r)
             self.list.addItem(item)
         self.list.setCurrentRow(0)

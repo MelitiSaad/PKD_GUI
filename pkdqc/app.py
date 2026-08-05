@@ -48,9 +48,10 @@ def _offer_recovery(win: MainWindow) -> None:
     if dlg.action == "recover":
         try:
             image = io.load_image(rec.image_path)
+            session.validate_recovery_image(rec, image)
             seg = session.load_recovered_segmentation(rec)
             if seg.data.shape == image.shape:
-                win.load_recovered(image, seg, rec.session_id)
+                win.load_recovered(image, seg, rec)
                 session.discard(rec)
             else:
                 log.warning("Recovered labels don't match image shape; skipping")

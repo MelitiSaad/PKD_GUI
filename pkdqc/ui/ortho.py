@@ -167,8 +167,9 @@ class PlaneWidget(QWidget):
         hb.setContentsMargins(10, 5, 10, 5)
         self.title = QLabel(plane.name.capitalize())
         self.title.setProperty("role", "subtitle")
+        self.markers = QLabel(""); self.markers.setProperty("role", "muted")
         self.info = QLabel(""); self.info.setProperty("role", "muted")
-        hb.addWidget(self.title); hb.addStretch(1); hb.addWidget(self.info)
+        hb.addWidget(self.title); hb.addWidget(self.markers); hb.addStretch(1); hb.addWidget(self.info)
         v.addWidget(header)
 
         self.glw = pg.GraphicsLayoutWidget()
@@ -218,6 +219,9 @@ class PlaneWidget(QWidget):
         self._refresh_overlay()
         v, h = self.plane.vox_to_disp(self.owner.cursor, img.shape)
         self.cx.setPos(h + 0.5); self.cy.setPos(v + 0.5)
+        if getattr(img, "geometry", None) is not None:
+            m = self.plane.edge_markers(img.geometry)
+            self.markers.setText(f"  {m['left']}↔{m['right']}  {m['top']}↕{m['bottom']}")
         di = self.owner.cursor[self.plane.depth_axis]
         self.info.setText(f"{di + 1} / {self.plane.depth_len(img.shape)}")
 

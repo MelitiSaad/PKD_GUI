@@ -14,6 +14,8 @@ from typing import Tuple
 
 import numpy as np
 
+from .geometry import ImageGeometry
+
 
 @dataclass
 class ImageVolume:
@@ -21,6 +23,7 @@ class ImageVolume:
     spacing: Tuple[float, float, float]  # mm per (row, col, slice)
     affine: np.ndarray                   # 4x4, for saving derived volumes
     path: str = ""
+    geometry: ImageGeometry | None = None
 
     def __post_init__(self):
         if self.data.ndim != 3:
@@ -34,6 +37,16 @@ class ImageVolume:
         else:
             lo, hi = 0.0, 1.0
         self.default_window: Tuple[float, float] = (float(lo), float(hi))
+        if self.geometry is None:
+            aff = np.asarray(self.affine, dtype=float)
+            if np.allclose(aff, np.eye(4)) and tuple(float(v) for v in self.spacing) != (1.0, 1.0, 1.0):
+                aff = np.diag([float(self.spacing[0]), float(self.spacing[1]), float(self.spacing[2]), 1.0])
+                self.affine = aff
+            self.geometry = ImageGeometry.from_affine(self.data.shape, self.affine, spacing=self.spacing)
+        if not self.geometry.validation.ok:
+            raise ValueError("; ".join(self.geometry.validation.errors))
+        self.spacing = self.geometry.spacing
+        self.affine = self.geometry.affine
 
     @property
     def shape(self) -> Tuple[int, int, int]:
@@ -45,8 +58,7 @@ class ImageVolume:
 
     @property
     def voxel_volume_mm3(self) -> float:
-        sr, sc, ss = self.spacing
-        return float(sr * sc * ss)
+        return float(self.geometry.voxel_volume_mm3 if self.geometry is not None else abs(np.linalg.det(self.affine[:3, :3])))
 
     def slice(self, z: int) -> np.ndarray:
         return self.data[:, :, int(z)]
