@@ -736,7 +736,15 @@ class MainWindow(QMainWindow):
         path = self.document.segmentation_path
         name = os.path.basename(path) if path else ("Untitled segmentation" if self.seg else "")
         self.lbl_document.setText((name + (" *" if dirty else "")) if name else "")
-        self.lbl_document.setToolTip(path or "Segmentation has not been saved")
+        tip = path or "Segmentation has not been saved"
+        if self.image is not None and getattr(self.image, "geometry", None) is not None:
+            g = self.image.geometry
+            status = "valid" if g.validation.ok else "invalid"
+            tip += (f"\nImage geometry: shape {g.shape}, spacing "
+                    f"{tuple(round(v, 4) for v in g.spacing)} mm, orientation {g.orientation}, "
+                    f"voxel volume {g.voxel_volume_mm3:.6g} mm³, status {status}, "
+                    "display convention neurological/RAS+")
+        self.lbl_document.setToolTip(tip)
         self.setWindowTitle(f"{'*' if dirty else ''}{config.APP_NAME}")
 
     # ================================================================ misc

@@ -4,7 +4,8 @@ Effort: S (days), M (1–3 weeks), L (1–2 months), XL (multi-quarter), subject
 
 | Priority / item | Benefit and approach | Dependencies / risks / effort | Acceptance criteria and tests | Likely subsystems |
 |---|---|---|---|---|
-| **P0 Geometry contract + DICOM series selector** | Prevent wrong anatomy/orientation; immutable `ImageGeometry`, UID grouping, IOP/IPP affine, enhanced multiframe | De-identified fixtures, pydicom handlers; vendor variance; **L** | Oblique/reversed/mixed/gapped series match reference world coordinates; visible axis markers; unit+integration+phantom tests | `core/io`, `volume`, new geometry/selector UI |
+| **P0 Geometry contract — completed Round 1C** | Prevent wrong NIfTI anatomy/orientation; `ImageGeometry`, affine-derived markers, determinant volumes, qform/sform+units policy | DICOM remains separate; **M** | RAS/flipped/oblique/shear/unit/qform tests, asymmetric phantom, save/reload and recovery compatibility | `core/geometry`, `io`, `volume`, `planes`, UI markers |
+| **P0 DICOM series selector + geometry** | Preserve patient/world coordinates for DICOM, group by UID/frame, IOP/IPP affine, enhanced multiframe | De-identified fixtures, pydicom handlers; vendor variance; **L** | Oblique/reversed/mixed/gapped series match reference world coordinates and selector prevents series mixing | `core/io`, selector UI, DICOM tests |
 | **P0 Strict label validation/dtype policy — completed Round 1A** | Block silent corruption; validate finite integral range before conversion | Decide uint16 vs uint32; interoperability; **S** | malformed inputs rejected with counts; max label roundtrip exact | `io`, `segmentation`, `labels`, tests |
 | **P0 Safe case lifecycle and standard segmentation save — completed Round 1B** | Prevent accidental data loss; document state, normal Save/current path, Save As/user path, and Save/Discard/Cancel | Product filename/sidecar policy; **M** | every dirty close/switch and overwrite-confirmation branch tested; explicit overwrite permitted; recovery retained until disposition | `document`, `main_window`, `session`, `io` |
 | **P0 Recovery v2 + transactional edits — completed** | Trustworthy rollback/restart; checksummed manifest and rollback-capable edit transaction | schema migration, storage; **M** | fault injection at write/mutation phases; source affine/hash verification; no false “unchanged” claim | `session`, commands/history/errors` |
@@ -70,3 +71,7 @@ a prior valid generation, marks corrupt and legacy data without silently deletin
 document revision/path/dirty state, and retires sessions only after explicit lifecycle outcomes.
 Fault injection covers every write, commit, and cleanup boundary. Background checkpointing and
 DICOM identity remain deliberately outside this milestone.
+
+### Round 1C completion
+
+Round 1C introduces the NIfTI `ImageGeometry` contract, determinant-based physical volumes, affine-derived patient-orientation markers, qform/sform and spatial-unit validation, an asymmetric synthetic phantom test, and save/reload geometry preservation tests. DICOM geometry remains deliberately scoped to the next milestone.

@@ -13,6 +13,7 @@ from typing import Tuple
 
 import numpy as np
 
+from .geometry import ImageGeometry, validate_nifti_header
 from .labels import LabelTable
 from .segmentation import Segmentation
 from .volume import ImageVolume
@@ -34,8 +35,11 @@ def _is_nifti(path: str) -> bool:
 def _load_nifti(path: str, as_int: bool):
     import nibabel as nib
 
-    img = nib.load(path)
-    img = nib.as_closest_canonical(img)          # RAS+ orientation
+    raw = nib.load(path)
+    units, header_errors, header_warnings = validate_nifti_header(raw)
+    if header_errors:
+        raise LoadError("; ".join(header_errors))
+    img = nib.as_closest_canonical(raw)          # RAS+ orientation
     zooms = img.header.get_zooms()[:3]
     spacing = tuple(float(z) if z and np.isfinite(z) else 1.0 for z in zooms)
     if len(spacing) < 3:
@@ -45,7 +49,13 @@ def _load_nifti(path: str, as_int: bool):
     else:
         data = np.asanyarray(img.dataobj).astype(np.float32)
     data = np.ascontiguousarray(data)
-    return data, spacing, img.affine
+    qcode = int(raw.header["qform_code"]) if "qform_code" in raw.header else 0
+    scode = int(raw.header["sform_code"]) if "sform_code" in raw.header else 0
+    geom = ImageGeometry.from_affine(data.shape, img.affine, spacing=spacing, spatial_units=units, qform_code=qcode, sform_code=scode)
+    errors = tuple(header_errors) + geom.validation.errors
+    if errors:
+        raise LoadError("; ".join(errors))
+    return data, geom.spacing, geom.affine, geom
 
 
 # --------------------------------------------------------------------- DICOM
@@ -113,7 +123,8 @@ def _load_dicom_series(path: str):
         arr = np.ascontiguousarray(np.transpose(arr, (1, 2, 0)))      # (rows, cols, frames)
         ps = _pixel_spacing(ds)
         st = float(getattr(ds, "SpacingBetweenSlices", 0) or getattr(ds, "SliceThickness", 1.0) or 1.0)
-        return arr, (ps[0], ps[1], st), np.eye(4)
+        affine = np.diag([ps[0], ps[1], st, 1.0])
+        return arr, (ps[0], ps[1], st), affine, ImageGeometry.from_affine(arr.shape, affine, spacing=(ps[0], ps[1], st))
 
     # Multi-slice series: keep 2D frames of a consistent shape, sorted by position.
     datasets = [d for d in datasets if d.pixel_array.ndim == 2]
@@ -129,16 +140,18 @@ def _load_dicom_series(path: str):
         dz = abs(_slice_z(frames[1]) - _slice_z(frames[0]))
         if dz > 0:
             st = dz
-    return np.ascontiguousarray(vol), (ps[0], ps[1], st), np.eye(4)
+    vol = np.ascontiguousarray(vol)
+    affine = np.diag([ps[0], ps[1], st, 1.0])
+    return vol, (ps[0], ps[1], st), affine, ImageGeometry.from_affine(vol.shape, affine, spacing=(ps[0], ps[1], st))
 
 
 # --------------------------------------------------------------------- API
 def load_image(path: str) -> ImageVolume:
     try:
         if _is_nifti(path):
-            data, spacing, affine = _load_nifti(path, as_int=False)
+            data, spacing, affine, geometry = _load_nifti(path, as_int=False)
         else:
-            data, spacing, affine = _load_dicom_series(path)
+            data, spacing, affine, geometry = _load_dicom_series(path)
         if data.ndim != 3:
             raise LoadError(
                 f"Image has shape {data.shape}; a single 3D volume is required. "
@@ -154,16 +167,16 @@ def load_image(path: str) -> ImageVolume:
         raise
     except Exception as exc:  # surface a clean message to the UI
         raise LoadError(f"Could not read image '{os.path.basename(path)}': {exc}") from exc
-    return ImageVolume(data=data, spacing=spacing, affine=affine, path=path)
+    return ImageVolume(data=data, spacing=spacing, affine=affine, path=path, geometry=geometry)
 
 
 def load_segmentation(path: str, ref_shape: Tuple[int, int, int],
                       ref_affine: np.ndarray | None = None) -> Segmentation:
     try:
         if _is_nifti(path):
-            data, _spacing, affine = _load_nifti(path, as_int=True)
+            data, _spacing, affine, _geometry = _load_nifti(path, as_int=True)
         else:
-            arr, _spacing, affine = _load_dicom_series(path)
+            arr, _spacing, affine, _geometry = _load_dicom_series(path)
             data = validated_labels(arr)
     except LoadError:
         raise
@@ -207,6 +220,9 @@ def save_segmentation(seg: Segmentation, image: ImageVolume, path: str) -> None:
     try:
         out = nib.Nifti1Image(seg.data.astype(np.uint16, copy=False), image.affine)
         out.header.set_zooms(tuple(float(v) for v in image.spacing))
+        out.header.set_xyzt_units("mm")
+        out.set_qform(image.affine, code=1)
+        out.set_sform(image.affine, code=1)
         nib.save(out, tmp)
         os.replace(tmp, path)
     except BaseException:
