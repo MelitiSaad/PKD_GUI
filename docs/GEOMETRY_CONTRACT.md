@@ -63,3 +63,5 @@ must be nearest-neighbour only.
 DICOM still uses the legacy best-effort loader and remains the next focused P0
 milestone.  Round 1C does not add anatomical-plane reslicing, registration,
 advanced metadata preservation, or new segmentation export formats.
+
+Round 1H validates every added layer against the single reference shape and affine before mutating the layer collection; it performs no registration or resampling.

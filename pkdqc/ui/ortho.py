@@ -182,10 +182,13 @@ class PlaneWidget(QWidget):
 
         self.img_item = pg.ImageItem()
         self.seg_item = pg.ImageItem(); self.seg_item.setZValue(10)
+        self.layer_items = {}
         self.selected_item = pg.ImageItem(); self.selected_item.setZValue(11)
+        self.preview_item = pg.ImageItem(); self.preview_item.setZValue(12)
         self.vb.addItem(self.img_item)
         self.vb.addItem(self.seg_item)
         self.vb.addItem(self.selected_item)
+        self.vb.addItem(self.preview_item)
 
         pen = QPen(QColor(theme.ACCENT)); pen.setCosmetic(True); pen.setWidthF(0.8)
         pen.setStyle(Qt.PenStyle.DashLine)
@@ -228,7 +231,32 @@ class PlaneWidget(QWidget):
     def _refresh_overlay(self):
         seg = self.owner.seg
         if seg is None:
-            self.seg_item.clear(); self.selected_item.clear(); return
+            self.seg_item.clear(); self.selected_item.clear()
+            for item in self.layer_items.values(): item.clear()
+            self._refresh_preview()
+            return
+        descriptors = getattr(self.owner, "rendering_layers", None)
+        if descriptors:
+            active_id = getattr(self.owner, "active_layer_id", None)
+            wanted = {d.layer_id for d in descriptors}
+            for layer_id in tuple(self.layer_items):
+                if layer_id not in wanted:
+                    item = self.layer_items.pop(layer_id); self.vb.removeItem(item)
+            for z, desc in enumerate(descriptors):
+                if desc.layer_id == active_id:
+                    item = self.seg_item
+                else:
+                    item = self.layer_items.get(desc.layer_id)
+                    if item is None:
+                        item = pg.ImageItem(); self.vb.addItem(item)
+                        self.layer_items[desc.layer_id] = item
+                item.setZValue(10 + z * .01); item.setOpacity(desc.opacity)
+                if not desc.visible:
+                    item.clear(); continue
+                lut = desc.segmentation.labels.lut(); maximum = max(1, len(lut) - 1)
+                arr = self.plane.slice2d(desc.segmentation.data, self.owner.cursor)
+                item.setImage(arr, autoLevels=False, levels=(0, maximum), lut=lut)
+            # Highlighting below is deliberately scoped to the active layer.
         lut = seg.labels.lut()
         max_id = max(1, lut.shape[0] - 1)
         current = self.plane.slice2d(seg.data, self.owner.cursor).copy()
@@ -244,20 +272,31 @@ class PlaneWidget(QWidget):
         selected = self.owner.selected_label_id
         if selected is None:
             self.selected_item.clear()
-            return
+            self._refresh_preview(); return
         lab = seg.labels.labels.get(selected)
         if lab is None or not lab.visible:
             self.selected_item.clear()
-            return
+            self._refresh_preview(); return
         # A lightweight alpha mask makes the selected object obvious without
         # altering the label overlay or adding work to live brush strokes.
         mask = current == np.uint16(selected)
         if not mask.any():
             self.selected_item.clear()
-            return
+            self._refresh_preview(); return
         color = np.array([[0, 0, 0, 0], [*lab.color, 76]], dtype=np.uint8)
         self.selected_item.setImage(mask.astype(np.uint8), autoLevels=False,
                                     levels=(0, 1), lut=color)
+        self._refresh_preview()
+
+    def _refresh_preview(self):
+        mask = getattr(self.owner, "intelligent_fill_preview", None)
+        if mask is None:
+            self.preview_item.clear(); return
+        current = self.plane.slice2d(mask, self.owner.cursor)
+        if not current.any():
+            self.preview_item.clear(); return
+        lut = np.array([[0, 0, 0, 0], [255, 210, 40, 150]], dtype=np.uint8)
+        self.preview_item.setImage(current.astype(np.uint8), autoLevels=False, levels=(0, 1), lut=lut)
 
     def redraw_overlay(self):
         """Coalesce pointer-rate overlay uploads into one event-loop frame.
@@ -335,11 +374,15 @@ class OrthoView(QWidget):
     hovered = Signal(int, int, int)
     labelPicked = Signal(int)
     layoutChanged = Signal(str)
+    seedClicked = Signal(str, int, int, int)
 
     def __init__(self, enable_3d: bool = True, parent=None):
         super().__init__(parent)
         self.image = None
         self.seg = None
+        self.rendering_layers = ()
+        self.active_layer_id = None
+        self.intelligent_fill_preview = None
         self.cursor = [0, 0, 0]
         self.window = (0.0, 1.0)
         self.controller = None
@@ -425,6 +468,13 @@ class OrthoView(QWidget):
         self.windowChanged.emit(*self.window)
         self.cursorChanged.emit(*self.cursor)
 
+    def set_layers(self, image, descriptors, active_layer_id):
+        """Install independent slice overlays without combining their arrays."""
+        self.rendering_layers = tuple(descriptors)
+        self.active_layer_id = active_layer_id
+        active = next((x for x in self.rendering_layers if x.layer_id == active_layer_id), None)
+        self.set_data(image, active.segmentation if active else None)
+
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self.fit_all()
@@ -483,8 +533,12 @@ class OrthoView(QWidget):
         self.set_cursor(*plane.disp_to_vox(v, h, self.cursor, self.image.shape))
 
     def navigate_click(self, plane, v, h):
+        if not (0 <= int(v) < plane.vertical_len(self.image.shape) and
+                0 <= int(h) < plane.horizontal_len(self.image.shape)):
+            return
         vox = plane.disp_to_vox(v, h, self.cursor, self.image.shape)
         self.set_cursor(*vox)
+        self.seedClicked.emit(plane.name, *vox)
         if self.seg is not None:
             lid = int(self.seg.data[vox])
             if lid > 0:

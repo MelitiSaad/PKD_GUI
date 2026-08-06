@@ -107,3 +107,9 @@ feature is introduced.
 
 ## Round 1G stabilization status
 Round 1G is a temporary safety gate, not a feature freeze. It keeps Region Review optional, adds minimal recommended shortcut defaults with user configuration, hardens recovery-session retirement around background autosave, and adds CI coverage. Remaining release blockers include the absence of a product-owner-approved repository license, Windows packaging verification, and clinical validation; the next milestone should return to one focused feature or improvement per fresh branch.
+
+## Round 1H: independent segmentation layers
+The Qt-free ordered case model, independent histories/namespaces/save state, per-layer slice rendering descriptors, and global overlay visibility are implemented. Region Review and 3D remain active-layer-only and NIfTI files remain independent. Full workspace persistence is deliberately deferred. The recommended next focused milestone is hardened per-layer recovery orchestration and large-volume multi-layer profiling on supported Windows GPU/driver combinations, without adding comparison-specific layer types.
+
+## Round 1I: conservative Intelligent Fill
+Round 1I adds seed-based intensity-connected preview and one-command apply for the active layer. It is not AI, defaults to current-plane 2D, and makes 3D an explicit advanced choice. The next milestone should be selected only after Qt CI, Windows interaction QA, and clinical workflow review of user-chosen intensity limits.

@@ -166,3 +166,9 @@ QT_QPA_PLATFORM=offscreen python make_preview.py   # headless integration + prev
 
 ### Round 1G stabilization notes
 PKD-QC keeps only familiar recommended shortcut defaults: Ctrl+O, Ctrl+L, Ctrl+S, Ctrl+Shift+S, Ctrl+N, Ctrl+Z, Ctrl+Y, and Ctrl+Q. Specialized commands remain available through menus, toolbars, and Region Review controls but start unassigned and can be configured in Keyboard Shortcuts. Region Review is optional and organizes existing segmentation regions; it does not detect cysts. NIfTI alone does not preserve custom label names and colours.
+
+### Round 1H — independent segmentation layers
+Multiple segmentation NIfTI files may share one reference image. Each layer retains its own path, label table, numeric label namespace, history, dirty state, visibility, and opacity; only the selected layer is editable and layers are never silently merged. Thus label `1` in an organ file and label `1` in a cyst file are independent. Save/Save As target the active layer and Save All writes separate files. `S` hides/restores every 2D overlay without changing individual visibility. Region Review, volumetry, edited-slice navigation, and the optional 3D view use the active layer only. NIfTI alone does not preserve custom names or display colours, and full workspace persistence is not yet available.
+
+### Intelligent Fill
+**Intelligent Fill is not AI and does not detect organs or cysts.** It grows a region connected to a user-selected seed, limited by user-selected image intensities, connectivity, label-protection rules, and either the current 2D plane (the conservative default) or explicit advanced 3D scope. The yellow preview does not modify the segmentation; Apply records one exactly undoable edit on the active layer, while Cancel changes nothing.
