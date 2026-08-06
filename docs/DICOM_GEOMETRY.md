@@ -69,3 +69,5 @@ handler remain unsupported.
 
 ## Round 1G DICOM note
 Current DICOM support is image-series loading with geometry validation and a PHI-safe chooser when multiple valid series are found. DICOM SEG export/import, registration, and resampling remain out of scope.
+
+All segmentation layers share the one canonical reference geometry. Incompatible layers are rejected rather than resampled.
