@@ -134,3 +134,6 @@ need your IT team's help.** Specifically:
 
 ## Round 1G manual QA checklist
 On Windows, verify Open image, Load segmentation, Save, Save As, New segmentation, Undo, Redo, and Quit shortcuts; confirm specialized commands are unassigned until configured; confirm Keyboard Shortcuts can assign, clear, reject duplicates, persist, and reset. Verify Region Review enters only when requested, grouping changes navigation, isolation only changes overlay visibility, and Save/Discard/case replacement/clean close do not leave retired recovery sessions.
+
+## Round 1H Windows manual QA
+Open one image; add organ and cyst segmentations as separate layers; verify both may contain label 1, switch the active editing target, edit/undo/redo each independently, and vary visibility, order, and opacity. Press `S` with the viewer focused and confirm all overlays hide and the exact per-layer visibility returns; verify typing `S` in an editor does not toggle them. Save each layer, exercise Save All including a pathless layer, and test Save/Discard/Cancel while removing/replacing a dirty layer and Save All/Discard All/Cancel on close. Force-close with two dirty layers and verify each recovery generation is offered independently on restart.
