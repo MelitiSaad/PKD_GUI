@@ -13,6 +13,7 @@ RECOMMENDED_DEFAULTS = {
     "undo": "Ctrl+Z",
     "redo": "Ctrl+Y",
     "quit": "Ctrl+Q",
+    "toggle_segmentations": "S",
 }
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ def build_command_registry(tools, operations) -> dict[str, CommandSpec]:
         ("undo", "Undo", "Editing"), ("redo", "Redo", "Editing"),
         ("open_image", "Open image", "File"), ("load_seg", "Load segmentation", "File"),
         ("save", "Save segmentation", "File"), ("save_as", "Save segmentation as…", "File"),
+        ("save_all", "Save All Segmentations", "File"),
         ("new_seg", "New segmentation", "File"), ("quit", "Quit", "File"),
         ("next_edited", "Next edited slice", "Navigation"), ("prev_edited", "Previous edited slice", "Navigation"),
         ("brush_minus", "Smaller brush", "Brush"), ("brush_plus", "Larger brush", "Brush"),
@@ -43,6 +45,8 @@ def build_command_registry(tools, operations) -> dict[str, CommandSpec]:
         ("reset_view", "Reset zoom", "View"), ("update_3d", "Update 3D", "3D"),
         ("continuous_3d", "Continuous 3D update", "3D"), ("axes_3d", "Show 3D axes", "3D"),
         ("contrast", "Contrast…", "View"), ("remove_unused", "Remove unused objects", "Cleanup"),
+        ("intelligent_fill", "Intelligent Fill…", "Correction"),
+        ("toggle_segmentations", "Show/Hide All Segmentations", "View"),
         ("layout_grid", "2×2", "Layout"), ("layout_axial", "Axial", "Layout"),
         ("layout_coronal", "Coronal", "Layout"), ("layout_sagittal", "Sagittal", "Layout"),
         ("layout_3d", "3D", "Layout"),
@@ -61,6 +65,13 @@ def migrate_shortcuts(stored: object, registry: Mapping[str, CommandSpec]) -> di
         for aid, key in stored.items():
             if aid in out:
                 out[str(aid)] = str(key or "")
+        # A newly introduced recommendation must yield to an existing user
+        # assignment instead of silently creating an ambiguous QAction pair.
+        if "toggle_segmentations" not in stored:
+            used = {str(key or "").strip().lower() for aid, key in stored.items()
+                    if aid != "toggle_segmentations"}
+            if out.get("toggle_segmentations", "").lower() in used:
+                out["toggle_segmentations"] = ""
     return out
 
 

@@ -42,6 +42,7 @@ def _title(text: str) -> QLabel:
 class LabelPanel(QWidget):
     activeLabelChanged = Signal(int)
     overlayChanged = Signal()
+    opacityChanged = Signal(int)
     deleteLabelRequested = Signal(int)
 
     def __init__(self, parent=None):
@@ -265,9 +266,7 @@ class LabelPanel(QWidget):
 
     def _on_opacity(self, val: int) -> None:
         self.op_value.setText(f"{val}%")
-        if self.seg is not None:
-            self.seg.labels.alpha = int(round(val / 100 * 255))
-            self.overlayChanged.emit()
+        if self.seg is not None: self.opacityChanged.emit(val)
 
     # -- volumes ---------------------------------------------------------
 
