@@ -164,3 +164,8 @@ Manual QA checklist:
 
 ## Round 1G integration notes
 Region Review organizes voxels that are already present in the segmentation; it does not detect cysts or create automatic cyst segmentations. It supports shared-label disconnected regions, one numeric label per cyst, and mixed conventions. Same-label touching cysts are one connected component under the selected connectivity. Grouping modes now change the review queue: connected regions visits every component, labels/colors visits one representative per label, and labels-with-components orders components by label. Isolation is display-only and must not modify labels, history, dirty state, revision, or saved data. Custom label names and colours are not preserved by NIfTI alone unless the user manages metadata outside the NIfTI file.
+
+## Round 1H layer scope
+A case has one reference image and an ordered collection of stable-ID segmentation layers. Arrays and numeric label IDs remain layer-local and are never flattened or offset. Only the active layer supplies editing, history, Region Review, volumetry, edited slices, and 3D context; 2D rendering composites independently generated slices for all effectively visible layers. Background and recovery work must match case ID, layer ID, and source revision before application. Recovery remains per-layer; full workspace layout persistence is not implemented.
+
+Region isolation masks only the active layer; unrelated visible layers remain displayed. Switching layers switches review identity and an index from one layer never authorizes deletion in another.
