@@ -23,7 +23,7 @@ from typing import Optional
 
 import numpy as np
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QSlider, QSpinBox, QToolBar, QToolButton, QToolTip, QVBoxLayout,
@@ -42,6 +42,8 @@ from ..core.background import ArraySnapshot, BackgroundTaskService, TaskTag
 from ..core.history import History
 from ..core.document import Disposition, SegmentationDocument
 from ..core.layers import SegmentationLayers
+from ..core.intelligent_fill import IntelligentFillRequest, command_for_preview, compute_preview
+from ..core.label_policy import policy_for
 from ..core.segmentation import Segmentation
 from ..core.volumetry import compute_volumes
 from ..core.session import Session
@@ -50,6 +52,7 @@ from .contrast import ContrastDialog
 from .dialogs import DicomSeriesDialog, ShortcutsDialog, about_html
 from .label_panel import LabelPanel
 from .layers_panel import LayersPanel
+from .intelligent_fill_dialog import IntelligentFillDialog
 from .ortho import OrthoView
 from .region_review import RegionReviewPanel
 from .tools import ToolController
@@ -114,6 +117,11 @@ class MainWindow(QMainWindow):
         self._retired_sessions: set[str] = set()
         self._layer_sessions = {}
         self._layer_regions = {}
+        self._ifill_dialog = None
+        self._ifill_seed = None
+        self._ifill_plane = None
+        self._ifill_result = None
+        self._ifill_source = None
 
         self.act: dict[str, QAction] = {}
         self._make_actions()
@@ -131,6 +139,8 @@ class MainWindow(QMainWindow):
         self.controller.edited.connect(self._on_edited)
         self._connect()
         self._set_tool("crosshair")
+        self._ifill_escape = QShortcut(QKeySequence.StandardKey.Cancel, self)
+        self._ifill_escape.setEnabled(False); self._ifill_escape.activated.connect(self._cancel_intelligent_fill)
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setInterval(config.AUTOSAVE_INTERVAL_MS)
@@ -184,6 +194,7 @@ class MainWindow(QMainWindow):
         self._mk("brush_minus"); self._mk("brush_plus")
         self._mk("reset_view", "reset_view"); self._mk("update_3d", "cube")
         self._mk("contrast", "threshold"); self._mk("remove_unused")
+        self._mk("intelligent_fill")
         self._mk("toggle_segmentations", checkable=True)
         self.act["toggle_segmentations"].setChecked(True)
         self._mk("region_toggle")
@@ -242,6 +253,8 @@ class MainWindow(QMainWindow):
         for aid in ("load_seg", "save", "save_as", "new_seg"):
             m_seg.addAction(self.act[aid])
         m_seg.addAction(self.act["save_all"])
+        m_seg.addSeparator()
+        m_seg.addAction(self.act["intelligent_fill"])
         m_seg.addSeparator()
         m_cleanup = m_seg.addMenu("Clean up")
         for oid, _l, _i, _k in OPERATIONS:
@@ -397,6 +410,7 @@ class MainWindow(QMainWindow):
         self.act["update_3d"].triggered.connect(self._update_3d)
         self.act["contrast"].triggered.connect(self._open_contrast)
         self.act["remove_unused"].triggered.connect(self._remove_unused)
+        self.act["intelligent_fill"].triggered.connect(self._start_intelligent_fill)
         self.act["toggle_segmentations"].triggered.connect(self._toggle_segmentations)
         self.act["continuous_3d"].toggled.connect(self._toggle_continuous_3d)
         self.act["region_toggle"].triggered.connect(self._toggle_region_review)
@@ -415,6 +429,7 @@ class MainWindow(QMainWindow):
         self.ortho.cursorChanged.connect(self._on_cursor_changed)
         self.ortho.hovered.connect(self._on_hover)
         self.ortho.labelPicked.connect(self._on_label_picked)
+        self.ortho.seedClicked.connect(self._intelligent_fill_seed_clicked)
         self.ortho.layoutChanged.connect(self._on_layout_changed)
         self.slice_slider.valueChanged.connect(self.ortho.set_axial_slice)
         self.brush_spin.valueChanged.connect(self._on_spin_brush)
@@ -477,6 +492,8 @@ class MainWindow(QMainWindow):
 
     @gui_guard
     def _set_tool(self, name):
+        if self._ifill_dialog is not None:
+            self._cancel_intelligent_fill()
         self.controller.set_tool(name)
         self.act[name].setChecked(True)
         self._update_tool_feedback(name)
@@ -615,6 +632,88 @@ class MainWindow(QMainWindow):
         self.ortho.redraw_overlay()
         self.statusBar().showMessage(
             f"Removed {n} unused object{'s' if n != 1 else ''}." if n else "No unused objects.", 3000)
+
+    # ======================================================= Intelligent Fill
+    @gui_guard
+    def _start_intelligent_fill(self):
+        layer = self.layers.active
+        if self.image is None or layer is None or layer.locked:
+            QMessageBox.information(self, "Intelligent Fill unavailable",
+                                    "Open an image and select an editable segmentation layer first.")
+            return
+        self._cancel_intelligent_fill()
+        self.controller.set_tool("crosshair"); self.act["crosshair"].setChecked(True)
+        lo, hi = self.controller.threshold_band or self.image.default_window
+        self._ifill_dialog = IntelligentFillDialog(lo, hi, self)
+        self._ifill_dialog.parametersChanged.connect(self._recompute_intelligent_fill)
+        self._ifill_dialog.applyRequested.connect(self._apply_intelligent_fill)
+        self._ifill_dialog.cancelRequested.connect(self._cancel_intelligent_fill)
+        self._ifill_source = (self._case_id, layer.layer_id, layer.segmentation.revision)
+        self._ifill_dialog.show(); self._ifill_dialog.raise_()
+        self._ifill_escape.setEnabled(True)
+        self.statusBar().showMessage("Intelligent Fill: click a seed voxel in an image plane. Esc cancels.")
+
+    def _intelligent_fill_seed_clicked(self, plane_name, i, j, k):
+        if self._ifill_dialog is None or self.image is None: return
+        seed = (int(i), int(j), int(k)); value = float(self.image.data[seed])
+        if not np.isfinite(value):
+            self.statusBar().showMessage("Intelligent Fill seed must have a finite intensity.", 3000); return
+        self._ifill_seed, self._ifill_plane = seed, str(plane_name)
+        self._ifill_dialog.set_seed(seed, value); self._recompute_intelligent_fill()
+
+    def _recompute_intelligent_fill(self):
+        dialog = self._ifill_dialog; layer = self.layers.active
+        if dialog is None or layer is None or self._ifill_seed is None: return
+        case_id, layer_id, revision = self._ifill_source
+        if case_id != self._case_id or layer_id != layer.layer_id or revision != layer.segmentation.revision:
+            self._cancel_intelligent_fill(); return
+        scope = "3d" if dialog.scope.currentData() == "3d" else self._ifill_plane
+        connectivity = int(dialog.connectivity.currentText())
+        request = IntelligentFillRequest(
+            np.array(self.image.data, copy=True), np.array(layer.segmentation.data, copy=True),
+            self._ifill_seed, int(layer.segmentation.active_id), dialog.lower.value(),
+            dialog.upper.value(), scope, connectivity,
+            policy_for(layer.segmentation, protect_existing=self.controller.protect_existing),
+            case_id, layer_id, revision)
+        tag = TaskTag.make(case_id, revision, "intelligent_fill", {
+            "seed": self._ifill_seed, "bounds": (request.lower, request.upper),
+            "scope": scope, "connectivity": connectivity,
+            "protect": bool(self.controller.protect_existing)}, layer_id)
+        dialog.apply.setEnabled(False); dialog.help.setText("Computing preview…")
+        def work(token): return compute_preview(request, token)
+        def apply(result):
+            if self._ifill_dialog is not dialog or self.layers.active_layer_id != layer_id: return
+            self._ifill_result = result
+            mask = np.zeros(layer.segmentation.data.shape, dtype=bool)
+            if result.flat_indices.size: mask.reshape(-1)[result.flat_indices] = True
+            self.ortho.intelligent_fill_preview = mask; self.ortho.redraw_overlay()
+            dialog.set_result(result)
+        def error(exc):
+            if self._ifill_dialog is dialog:
+                dialog.help.setText(f"Preview failed: {exc}"); dialog.apply.setEnabled(False)
+        self.background.submit_latest(tag, work, apply, error)
+
+    @gui_guard
+    def _apply_intelligent_fill(self):
+        result = self._ifill_result; layer = self.layers.active
+        if result is None or layer is None: return
+        cmd = command_for_preview(layer.segmentation, result, case_id=self._case_id, layer_id=layer.layer_id)
+        if cmd is None:
+            self.statusBar().showMessage("Intelligent Fill has no changes to apply.", 3000); return
+        layer.history.push(cmd)
+        self._cancel_intelligent_fill()
+        self.ortho.notify_edit(); self._mark_dirty()
+        self.statusBar().showMessage(f"Intelligent Fill applied {cmd.flat_idx.size:,} voxels as one edit.", 4000)
+
+    def _cancel_intelligent_fill(self):
+        self.background.cancel_task_type("intelligent_fill") if hasattr(self, "background") else None
+        self._ifill_seed = self._ifill_plane = self._ifill_result = self._ifill_source = None
+        if hasattr(self, "ortho"):
+            self.ortho.intelligent_fill_preview = None; self.ortho.redraw_overlay()
+        dialog, self._ifill_dialog = self._ifill_dialog, None
+        if hasattr(self, "_ifill_escape"): self._ifill_escape.setEnabled(False)
+        if dialog is not None:
+            dialog.hide(); dialog.deleteLater()
 
     # ================================================================ files
     @gui_guard
@@ -811,6 +910,7 @@ class MainWindow(QMainWindow):
         self._reset_region_review(); self._refresh_layers(); self._sync_document_state()
 
     def _set_case(self, image, seg, seg_path):
+        self._cancel_intelligent_fill()
         self.background.cancel_all()
         for layer_id in tuple(self._layer_sessions): self._retire_layer(layer_id)
         self.image = image
@@ -850,6 +950,8 @@ class MainWindow(QMainWindow):
         if layer.layer_id == self.layers.active_layer_id: self.session = session
 
     def _retire_layer(self, layer_id, remove=True):
+        if self._ifill_source is not None and self._ifill_source[1] == layer_id:
+            self._cancel_intelligent_fill()
         session = self._layer_sessions.pop(layer_id, None)
         if session:
             self._retired_sessions.add(session.id); session.mark_clean(remove=remove)
@@ -865,6 +967,8 @@ class MainWindow(QMainWindow):
 
     def _activate_layer(self, layer_id):
         if self.layers.get(layer_id) is None: return
+        if self.layers.active_layer_id != layer_id:
+            self._cancel_intelligent_fill()
         old = self.layers.active
         if old is not None:
             self._layer_regions[old.layer_id] = (self.region_state, self.region_index,
@@ -1377,6 +1481,7 @@ class MainWindow(QMainWindow):
         self.act["save"].setEnabled(has_seg)
         self.act["save_as"].setEnabled(has_seg)
         self.act["save_all"].setEnabled(bool(self.layers.dirty_layers))
+        self.act["intelligent_fill"].setEnabled(has_seg and not bool(self.layers.active and self.layers.active.locked))
         self.act["region_toggle"].setEnabled(has_seg)
         for aid in ("region_next", "region_prev", "region_reviewed",
                     "region_unreviewed", "region_delete", "region_isolate"):
@@ -1438,6 +1543,7 @@ class MainWindow(QMainWindow):
             ev.ignore()
             return
         try:
+            self._cancel_intelligent_fill()
             self.settings.setValue(config.SK_GEOMETRY, self.saveGeometry())
             self._autosave_timer.stop()
             self._idle_timer.stop()

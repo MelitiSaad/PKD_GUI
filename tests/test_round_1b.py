@@ -149,22 +149,32 @@ def test_ui_save_actions_shortcut_enablement_and_indicator(image, monkeypatch):
         pytest.skip(f"Qt runtime unavailable: {exc}")
     app = QApplication.instance() or QApplication([])
     win = MainWindow(enable_3d=False)
-    assert win.act["save"].shortcut().toString() == "Ctrl+S"
-    assert not win.act["save"].isEnabled() and not win.act["save_as"].isEnabled()
-    Path(image.path).write_bytes(b"test image")
-    win._set_case(image, Segmentation.empty_like(image.shape), None)
-    assert win.act["save"].isEnabled() and win.act["save_as"].isEnabled()
-    assert "Untitled segmentation" in win.lbl_document.text()
-    edit(win.seg, win.history); win._mark_dirty()
-    assert win.lbl_document.text().endswith("*")
-    assert win.windowTitle().startswith("*")
-    win.document.saved_revision = win.seg.revision
-    win.session.mark_clean()
-    win.close()
-    app.processEvents()
-    assert not any(timer.isActive() for timer in (
-        win._autosave_timer, win._idle_timer, win._bg_timer, win._vol_timer
-    ))
+    try:
+        assert win.act["save"].shortcut().toString() == "Ctrl+S"
+        assert not win.act["save"].isEnabled() and not win.act["save_as"].isEnabled()
+        Path(image.path).write_bytes(b"test image")
+        win._set_case(image, Segmentation.empty_like(image.shape), None)
+        assert win.act["save"].isEnabled() and win.act["save_as"].isEnabled()
+        assert "Untitled segmentation" in win.lbl_document.text()
+        edit(win.seg, win.history); win._mark_dirty()
+        assert win.lbl_document.text().endswith("*")
+        assert win.windowTitle().startswith("*")
+    finally:
+        # Exercise (rather than bypass) the real layered close guard.  Scope
+        # the dialog response to close() so no later test or teardown dialog
+        # can be intercepted by this expectation.
+        if win.layers.dirty_layers:
+            from tests.test_round_1h_qt import _choose_button
+            with _choose_button(monkeypatch, "Discard All", title="Unsaved segmentation layers"):
+                assert win.close()
+        else:
+            assert win.close()
+        app.processEvents()
+        assert not win.isVisible()
+        assert win.background.closed
+        assert not any(timer.isActive() for timer in (
+            win._autosave_timer, win._idle_timer, win._bg_timer, win._vol_timer
+        ))
 
 
 def test_ui_save_and_save_as_are_wired_without_importing_qt():

@@ -29,6 +29,10 @@ jobs:
         run: timeout --signal=TERM 3m python -m pytest -vv -o faulthandler_timeout=60 tests/test_round_1h_layers.py
       - name: Run focused Round 1H real Qt tests
         run: timeout --signal=TERM 5m python -m pytest -vv -o faulthandler_timeout=60 tests/test_round_1h_qt.py
+      - name: Run focused Round 1I core tests
+        run: timeout --signal=TERM 4m python -m pytest -vv -o faulthandler_timeout=60 tests/test_round_1i_intelligent_fill.py
+      - name: Run focused Round 1I real Qt tests
+        run: timeout --signal=TERM 5m python -m pytest -vv -o faulthandler_timeout=60 tests/test_round_1i_qt.py
       - name: Run recovery and background tests
         run: timeout --signal=TERM 4m python -m pytest -vv -o faulthandler_timeout=60 tests/test_recovery_v2.py tests/test_round_1e_background.py
       - name: Run full test suite

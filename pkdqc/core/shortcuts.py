@@ -45,6 +45,7 @@ def build_command_registry(tools, operations) -> dict[str, CommandSpec]:
         ("reset_view", "Reset zoom", "View"), ("update_3d", "Update 3D", "3D"),
         ("continuous_3d", "Continuous 3D update", "3D"), ("axes_3d", "Show 3D axes", "3D"),
         ("contrast", "Contrast…", "View"), ("remove_unused", "Remove unused objects", "Cleanup"),
+        ("intelligent_fill", "Intelligent Fill…", "Correction"),
         ("toggle_segmentations", "Show/Hide All Segmentations", "View"),
         ("layout_grid", "2×2", "Layout"), ("layout_axial", "Axial", "Layout"),
         ("layout_coronal", "Coronal", "Layout"), ("layout_sagittal", "Sagittal", "Layout"),

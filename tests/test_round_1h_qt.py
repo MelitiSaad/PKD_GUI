@@ -97,15 +97,30 @@ def test_real_layers_dock_add_switch_render_edit_and_history(qtbot, tmp_path, mo
 
 
 def test_real_global_s_restores_visibility_and_respects_text_focus(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+    from PySide6.QtWidgets import QApplication
     from pkdqc.core.segmentation import Segmentation
     Qt, QTest, _button, QLineEdit, _window = _qt(); win = _case(tmp_path, qtbot)
     try:
         a = win.layers.add("a", Segmentation.empty_like(win.image.shape), visible=True, make_active=True)
         b = win.layers.add("b", Segmentation.empty_like(win.image.shape), visible=False)
         win._begin_layer_session(a); win._begin_layer_session(b); win._activate_layer(a.layer_id)
-        win.activateWindow(); win.setFocus(); QTest.keyClick(win, Qt.Key.Key_S)
+        action = win.act["toggle_segmentations"]
+        assert action.shortcut() == QKeySequence("S")
+        assert action.isEnabled()
+        assert action.shortcutContext() == Qt.ShortcutContext.WindowShortcut
+
+        # QMainWindow itself is not a reliable focus target under the offscreen
+        # platform.  Activate the top-level window, then deliver the real key
+        # event to a visible, non-editor child in that window.
+        win.raise_(); win.activateWindow()
+        qtbot.waitUntil(lambda: QApplication.activeWindow() is win)
+        win.layers_panel.list.setFocus(Qt.FocusReason.OtherFocusReason)
+        qtbot.waitUntil(lambda: win.layers_panel.list.hasFocus())
+        QTest.keyClick(win.layers_panel.list, Qt.Key.Key_S)
         qtbot.waitUntil(lambda: not win.layers.global_overlay_visible)
-        QTest.keyClick(win, Qt.Key.Key_S); qtbot.waitUntil(lambda: win.layers.global_overlay_visible)
+        QTest.keyClick(win.layers_panel.list, Qt.Key.Key_S)
+        qtbot.waitUntil(lambda: win.layers.global_overlay_visible)
         assert [a.visible, b.visible] == [True, False]
         editor = QLineEdit(win); editor.show(); editor.setFocus(); qtbot.waitUntil(lambda: editor.hasFocus())
         QTest.keyClicks(editor, "S"); assert editor.text() == "S" and win.layers.global_overlay_visible

@@ -161,3 +161,6 @@ numeric label values remain authoritative.
 
 ## Round 1H layer scope
 A case has one reference image and an ordered collection of stable-ID segmentation layers. Arrays and numeric label IDs remain layer-local and are never flattened or offset. Only the active layer supplies editing, history, Region Review, volumetry, edited slices, and 3D context; 2D rendering composites independently generated slices for all effectively visible layers. Background and recovery work must match case ID, layer ID, and source revision before application. Recovery remains per-layer; full workspace layout persistence is not implemented.
+
+## Intelligent Fill
+`core/intelligent_fill.py` is a Qt-free iterative connected-region algorithm. The UI submits immutable image/active-layer snapshots through the existing case/layer/revision-aware background service. A temporary per-plane preview is presentation state only; commit produces one `EditCommand` in the active layer history.

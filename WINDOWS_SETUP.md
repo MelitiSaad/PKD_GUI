@@ -137,3 +137,6 @@ On Windows, verify Open image, Load segmentation, Save, Save As, New segmentatio
 
 ## Round 1H Windows manual QA
 Open one image; add organ and cyst segmentations as separate layers; verify both may contain label 1, switch the active editing target, edit/undo/redo each independently, and vary visibility, order, and opacity. Press `S` with the viewer focused and confirm all overlays hide and the exact per-layer visibility returns; verify typing `S` in an editor does not toggle them. Save each layer, exercise Save All including a pathless layer, and test Save/Discard/Cancel while removing/replacing a dirty layer and Save All/Discard All/Cancel on close. Force-close with two dirty layers and verify each recovery generation is offered independently on restart.
+
+## Intelligent Fill manual QA
+On Windows, select a layer/label and choose Segmentation → Intelligent Fill. Click seeds in axial, coronal, and sagittal panes; confirm the yellow preview changes when intensity, connectivity, or 2D/3D scope changes but does not dirty the layer. Verify Cancel changes nothing, Apply is one undo step, redo is exact, protected labels form barriers, another layer with the same numeric label remains byte-identical, switching layers cancels preview, and closing with work running shuts down cleanly. This tool is intensity-connected correction, not AI detection.
